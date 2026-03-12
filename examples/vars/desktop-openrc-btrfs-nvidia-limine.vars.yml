@@ -1,0 +1,42 @@
+---
+# Template: Desktop + OpenRC + Btrfs + NVIDIA + Limine
+# IMPORTANT: Replace target_disk and password hashes before use.
+
+system_hostname: "omgently-desktop"
+timezone: "Asia/Jakarta"
+system_locale: "en_US.UTF-8"
+hwclock: "UTC"
+
+makeopts: "-j16 -l16"
+cpu_threads: "16"
+march_target: "native"
+cpu_vendor: "intel"
+
+target_disk: "/dev/nvme0n1"
+partition_layout: "flat"
+root_size_gb: "0"
+swap_size_gb: "16"
+filesystem: "btrfs"
+
+init_system: "openrc"
+gpu_vendor: "nvidia"
+device_type: "desktop"
+
+kernel_type: "bin"
+bootloader: "limine"
+login_style: "dm"
+
+accept_keywords: "amd64"
+accept_license: "*"
+
+username: "edo"
+user_password_hash: "$6$REPLACE_WITH_HASH"
+root_password_hash: "$6$REPLACE_WITH_HASH"
+
+setup_doas_instead_of_sudo: true
+default_terminal: "ghostty"
+default_browser: "brave"
+
+install_omarchy_dotfiles: true
+dotfiles_repo_url: "https://github.com/edo/gentoo-omarchy-dotfiles.git"
+gentoo_mirror: "https://distfiles.gentoo.org"

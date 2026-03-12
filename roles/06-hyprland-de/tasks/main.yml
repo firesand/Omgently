@@ -1,0 +1,261 @@
+---
+# 1. AUDIO & MULTIMEDIA (Pipewire Ecosystem)
+# ---------------------------------------------------------
+- name: Pastikan direktori package.use tersedia
+  become: true
+  ansible.builtin.file:
+    path: /mnt/gentoo/etc/portage/package.use
+    state: directory
+    mode: '0755'
+
+- name: Pastikan direktori package.accept_keywords tersedia
+  become: true
+  ansible.builtin.file:
+    path: /mnt/gentoo/etc/portage/package.accept_keywords
+    state: directory
+    mode: '0755'
+
+- name: Aktifkan USE flag sound-server untuk Pipewire
+  become: true
+  ansible.builtin.copy:
+    dest: /mnt/gentoo/etc/portage/package.use/pipewire
+    content: "media-video/pipewire sound-server extra pipewire-alsa"
+    mode: '0644'
+
+- name: Set USE flag keluarga font Nerd Fonts
+  become: true
+  ansible.builtin.copy:
+    dest: /mnt/gentoo/etc/portage/package.use/nerd-fonts
+    content: "media-fonts/nerd-fonts JetBrainsMono"
+    mode: '0644'
+
+- name: Set USE flags untuk NetworkManager Applet
+  become: true
+  ansible.builtin.copy:
+    dest: /mnt/gentoo/etc/portage/package.use/nm-applet
+    content: |
+      gnome-extra/nm-applet appindicator -modemmanager
+    mode: '0644'
+
+- name: Set USE flags brightnessctl (udev tanpa hard systemd dep)
+  become: true
+  ansible.builtin.copy:
+    dest: /mnt/gentoo/etc/portage/package.use/brightnessctl
+    mode: '0644'
+    content: |
+      app-misc/brightnessctl udev -systemd
+
+- name: Set package.accept_keywords tambahan Omgently
+  become: true
+  ansible.builtin.copy:
+    dest: /mnt/gentoo/etc/portage/package.accept_keywords/omgently-wayland-extras
+    content: |
+      # Core system (main repo, testing)
+      sys-boot/limine ~amd64
+      gui-apps/wf-recorder ~amd64
+
+      # Desktop (main repo, testing)
+      app-misc/nwg-look ~amd64
+      gui-apps/swayosd ~amd64
+      media-fonts/nerd-fonts ~amd64
+      www-client/brave-bin ~amd64
+
+      # GURU overlay (testing)
+      app-misc/cliphist ~amd64
+      app-misc/brightnessctl ~amd64
+    mode: '0644'
+
+- name: Instal Pipewire, Wireplumber, dan pavucontrol (Mixer)
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace media-video/pipewire media-video/wireplumber media-sound/pavucontrol
+
+# 2. SECURITY & PRIVILEGE (Polkit)
+# ---------------------------------------------------------
+- name: Instal Polkit dan Authentication Agent minimalis (lxqt)
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace sys-auth/polkit lxqt-base/lxqt-policykit
+
+- name: Instal XDG Desktop Portal untuk Hyprland
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace sys-apps/xdg-desktop-portal gui-libs/xdg-desktop-portal-hyprland
+
+# 3. THE OMARCHY VISUAL COMPONENTS
+# ---------------------------------------------------------
+- name: Instal komponen ekosistem Hyprland
+  become: true
+  ansible.builtin.command: >-
+    chroot /mnt/gentoo emerge --quiet --noreplace
+    gui-apps/waybar
+    gui-apps/wofi
+    gui-apps/mako
+    gui-apps/hyprpaper
+    gui-apps/wl-clipboard
+    gui-apps/grim
+    gui-apps/slurp
+
+# 3b. LOCK SCREEN & IDLE MANAGEMENT
+# ---------------------------------------------------------
+- name: Instal Hyprlock (Lock Screen)
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace gui-apps/hyprlock
+
+- name: Instal Hypridle (Idle Daemon)
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace gui-apps/hypridle
+
+# 3c. CLIPBOARD, MEDIA & SCREEN RECORDING
+# ---------------------------------------------------------
+- name: Instal Cliphist (Clipboard Manager)
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace app-misc/cliphist
+
+- name: Instal Playerctl (Media Key Control)
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace media-sound/playerctl
+
+- name: Instal Brightnessctl (Backlight Control)
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace app-misc/brightnessctl
+
+- name: Instal wf-recorder (Screen Recording)
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace gui-apps/wf-recorder
+
+# 4. NETWORK APPLET & FONTS
+# ---------------------------------------------------------
+- name: Instal NetworkManager Applet
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace gnome-extra/nm-applet
+
+- name: Instal Font modern (Nerd Fonts)
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace media-fonts/nerd-fonts
+
+- name: Instal nwg-look (GTK theme manager untuk Wayland)
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace app-misc/nwg-look
+
+- name: Instal qt5ct (Qt theme control untuk Wayland)
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace x11-misc/qt5ct
+
+- name: Instal SwayOSD (Volume/Brightness OSD)
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace gui-apps/swayosd
+
+- name: Instal Swappy (Screenshot annotator)
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace gui-apps/swappy
+
+# 4b. LAPTOP-SPECIFIC STACK (Power, Bluetooth, Regulatory)
+# ---------------------------------------------------------
+- name: Setup paket khusus laptop
+  become: true
+  ansible.builtin.command: >-
+    chroot /mnt/gentoo emerge --quiet --noreplace
+    sys-power/tlp
+    net-wireless/bluez
+    net-wireless/blueman
+    net-wireless/wireless-regdb
+  when: (device_type | default('desktop')) == 'laptop'
+
+- name: Cek status enable TLP (Systemd)
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo systemctl is-enabled tlp
+  register: tlp_systemd_enabled
+  failed_when: false
+  changed_when: false
+  when:
+    - (device_type | default('desktop')) == 'laptop'
+    - init_system == 'systemd'
+
+- name: Aktifkan TLP (Systemd) jika belum aktif
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo systemctl enable tlp
+  when:
+    - (device_type | default('desktop')) == 'laptop'
+    - init_system == 'systemd'
+    - tlp_systemd_enabled.rc != 0
+
+- name: Cek status runlevel TLP (OpenRC)
+  become: true
+  ansible.builtin.stat:
+    path: /mnt/gentoo/etc/runlevels/default/tlp
+  register: tlp_openrc_runlevel
+  when:
+    - (device_type | default('desktop')) == 'laptop'
+    - init_system == 'openrc'
+
+- name: Aktifkan TLP (OpenRC) jika belum aktif
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo rc-update add tlp default
+  when:
+    - (device_type | default('desktop')) == 'laptop'
+    - init_system == 'openrc'
+    - not tlp_openrc_runlevel.stat.exists
+
+- name: Cek status enable Bluetooth (Systemd)
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo systemctl is-enabled bluetooth
+  register: bluetooth_systemd_enabled
+  failed_when: false
+  changed_when: false
+  when:
+    - (device_type | default('desktop')) == 'laptop'
+    - init_system == 'systemd'
+
+- name: Aktifkan Bluetooth (Systemd) jika belum aktif
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo systemctl enable bluetooth
+  when:
+    - (device_type | default('desktop')) == 'laptop'
+    - init_system == 'systemd'
+    - bluetooth_systemd_enabled.rc != 0
+
+- name: Cek status runlevel Bluetooth (OpenRC)
+  become: true
+  ansible.builtin.stat:
+    path: /mnt/gentoo/etc/runlevels/default/bluetooth
+  register: bluetooth_openrc_runlevel
+  when:
+    - (device_type | default('desktop')) == 'laptop'
+    - init_system == 'openrc'
+
+- name: Aktifkan Bluetooth (OpenRC) jika belum aktif
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo rc-update add bluetooth default
+  when:
+    - (device_type | default('desktop')) == 'laptop'
+    - init_system == 'openrc'
+    - not bluetooth_openrc_runlevel.stat.exists
+
+# 5. SMOKE TEST PRECONDITION (Validasi cepat sebelum reboot)
+# ---------------------------------------------------------
+- name: Verifikasi precondition desktop Hyprland
+  become: true
+  ansible.builtin.shell: |
+    errors=""
+
+    for bin in pipewire wireplumber waybar wofi mako hyprpaper grim slurp wl-copy wl-paste pavucontrol hyprlock hypridle cliphist playerctl brightnessctl wf-recorder nwg-look qt5ct swayosd-server swayosd-client swappy; do
+      chroot /mnt/gentoo which "$bin" >/dev/null 2>&1 || errors="${errors}Binary ${bin} tidak ditemukan\n"
+    done
+
+    chroot /mnt/gentoo which xdg-desktop-portal >/dev/null 2>&1 || errors="${errors}Binary xdg-desktop-portal tidak ditemukan\n"
+    chroot /mnt/gentoo which nm-applet >/dev/null 2>&1 || errors="${errors}Binary nm-applet tidak ditemukan\n"
+
+    {% if (device_type | default('desktop')) == 'laptop' %}
+    for bin in tlp bluetoothctl blueman-manager; do
+      chroot /mnt/gentoo which "$bin" >/dev/null 2>&1 || errors="${errors}Binary ${bin} tidak ditemukan (laptop stack)\n"
+    done
+    chroot /mnt/gentoo test -f /usr/lib/firmware/regulatory.db || errors="${errors}wireless-regdb tidak ditemukan (/usr/lib/firmware/regulatory.db)\n"
+    {% endif %}
+
+    chroot /mnt/gentoo find /usr -name 'lxqt-policykit-agent' -type f 2>/dev/null | grep -q . || errors="${errors}Binary lxqt-policykit-agent tidak ditemukan\n"
+
+    if [ -n "$errors" ]; then
+      printf "%b" "$errors"
+      exit 1
+    fi
+  args:
+    executable: /bin/bash
+  changed_when: false

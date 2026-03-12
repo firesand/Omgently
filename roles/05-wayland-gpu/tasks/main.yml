@@ -1,0 +1,247 @@
+---
+# 1. D-BUS & SEAT MANAGEMENT (Urat Nadi Wayland)
+# ---------------------------------------------------------
+- name: Instal D-Bus (Sangat Krusial untuk IPC Wayland/Pipewire)
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace sys-apps/dbus
+
+- name: Aktifkan service D-Bus (Khusus OpenRC, systemd otomatis)
+  block:
+    - name: Cek status runlevel dbus (OpenRC)
+      become: true
+      ansible.builtin.stat:
+        path: /mnt/gentoo/etc/runlevels/default/dbus
+      register: dbus_openrc_runlevel
+
+    - name: Aktifkan service D-Bus jika belum aktif
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo rc-update add dbus default
+      when: not dbus_openrc_runlevel.stat.exists
+  when: init_system == 'openrc'
+
+- name: Setup Elogind (Khusus OpenRC)
+  block:
+    - name: Instal elogind
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace sys-auth/elogind
+
+    - name: Cek status runlevel elogind
+      become: true
+      ansible.builtin.stat:
+        path: /mnt/gentoo/etc/runlevels/default/elogind
+      register: elogind_openrc_runlevel
+
+    - name: Aktifkan service elogind jika belum aktif
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo rc-update add elogind default
+      when: not elogind_openrc_runlevel.stat.exists
+  when: init_system == 'openrc'
+
+- name: Setup Seat Management (Khusus OpenRC)
+  block:
+    - name: Instal seatd
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace sys-auth/seatd
+    - name: Cek status runlevel seatd
+      become: true
+      ansible.builtin.stat:
+        path: /mnt/gentoo/etc/runlevels/default/seatd
+      register: seatd_openrc_runlevel
+    - name: Aktifkan service seatd jika belum aktif
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo rc-update add seatd default
+      when: not seatd_openrc_runlevel.stat.exists
+    - name: Cek grup user untuk seatd
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo id -nG {{ username }}
+      register: user_groups
+      changed_when: false
+    - name: Masukkan user ke grup seat jika belum tergabung
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo usermod -aG seat {{ username }}
+      when: "'seat' not in user_groups.stdout.split()"
+  when: init_system == 'openrc'
+
+# 2. INSTALASI HYPRLAND & XWAYLAND
+# ---------------------------------------------------------
+- name: Instal XWayland dan Hyprland
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace gui-wm/hyprland x11-base/xwayland
+
+- name: Setup AMD/Intel GPU stack
+  when: gpu_vendor in ['amd', 'intel']
+  block:
+    - name: Pastikan direktori package.use tersedia untuk Mesa
+      become: true
+      ansible.builtin.file:
+        path: /mnt/gentoo/etc/portage/package.use
+        state: directory
+        mode: '0755'
+
+    - name: Set USE flag Vulkan untuk Mesa
+      become: true
+      ansible.builtin.copy:
+        dest: /mnt/gentoo/etc/portage/package.use/mesa-gpu-stack
+        mode: '0644'
+        content: |
+          media-libs/mesa vulkan
+
+    - name: Instal Mesa untuk AMD/Intel GPU stack
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace media-libs/mesa
+
+    - name: Instal xf86-video-amdgpu untuk fallback XWayland
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace x11-drivers/xf86-video-amdgpu
+      when: gpu_vendor == 'amd'
+
+# 3. BLOK KHUSUS NVIDIA (Mengacu pada Gentoo Wiki)
+# ---------------------------------------------------------
+- name: Setup NVIDIA Khusus Wayland
+  block:
+    - name: Pastikan direktori package.use tersedia
+      become: true
+      ansible.builtin.file:
+        path: /mnt/gentoo/etc/portage/package.use
+        state: directory
+        mode: '0755'
+
+    - name: Set USE flag wayland untuk nvidia-drivers
+      become: true
+      ansible.builtin.copy:
+        dest: /mnt/gentoo/etc/portage/package.use/nvidia-wayland
+        mode: '0644'
+        content: |
+          x11-drivers/nvidia-drivers wayland
+
+    - name: Emerge nvidia-drivers
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace x11-drivers/nvidia-drivers
+
+    - name: Paksa load modul NVIDIA saat boot (modules-load.d)
+      become: true
+      ansible.builtin.copy:
+        dest: /mnt/gentoo/etc/modules-load.d/nvidia.conf
+        content: |
+          nvidia
+          nvidia-modeset
+          nvidia-uvm
+          nvidia-drm
+
+    - name: Inject Environment Variables NVIDIA tanpa menimpa file global
+      become: true
+      ansible.builtin.blockinfile:
+        path: /mnt/gentoo/etc/environment
+        create: true
+        marker: "# {mark} Omgently NVIDIA"
+        block: |
+          LIBVA_DRIVER_NAME=nvidia
+          GBM_BACKEND=nvidia-drm
+          __GLX_VENDOR_LIBRARY_NAME=nvidia
+  when: gpu_vendor == 'nvidia'
+
+# 4. MANAJEMEN LOGIN (GREETD vs TTY)
+# ---------------------------------------------------------
+- name: Setup Greetd (Login Manager Elegan)
+  block:
+    - name: Instal greetd dan tuigreet
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace gui-libs/greetd gui-apps/tuigreet
+
+    - name: Konfigurasi greetd (Otomatis panggil Hyprland)
+      become: true
+      ansible.builtin.copy:
+        dest: /mnt/gentoo/etc/greetd/config.toml
+        content: |
+          [terminal]
+          vt = 1
+          [default_session]
+          command = "tuigreet --time --cmd 'dbus-run-session Hyprland'"
+          user = "greeter"
+
+    - name: Cek status enable greetd (Systemd)
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo systemctl is-enabled greetd
+      register: greetd_systemd_enabled
+      failed_when: false
+      changed_when: false
+      when: init_system == 'systemd'
+
+    - name: Aktifkan layanan greetd (Systemd) jika belum aktif
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo systemctl enable greetd
+      when: init_system == 'systemd' and greetd_systemd_enabled.rc != 0
+
+    - name: Cek status runlevel greetd (OpenRC)
+      become: true
+      ansible.builtin.stat:
+        path: /mnt/gentoo/etc/runlevels/default/greetd
+      register: greetd_openrc_runlevel
+      when: init_system == 'openrc'
+
+    - name: Aktifkan layanan greetd (OpenRC) jika belum aktif
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo rc-update add greetd default
+      when: init_system == 'openrc' and not greetd_openrc_runlevel.stat.exists
+  when: login_style == 'dm'
+
+- name: Setup TTY Murni (Dengan perbaikan XDG_RUNTIME_DIR)
+  block:
+    - name: Buat .bash_profile untuk sesi Wayland TTY
+      become: true
+      ansible.builtin.copy:
+        dest: /mnt/gentoo/home/{{ username }}/.bash_profile
+        mode: '0644'
+        content: |
+          # Gentoo-Omarchy TTY Profile
+          if [ -z "${XDG_RUNTIME_DIR}" ]; then
+              export XDG_RUNTIME_DIR=/tmp/hyprland-$(id -u)
+              mkdir -p "$XDG_RUNTIME_DIR"
+              chmod 0700 "$XDG_RUNTIME_DIR"
+          fi
+
+          # Hapus tanda pagar di bawah ini jika ingin Hyprland otomatis jalan setelah login:
+          # if [ -z "${WAYLAND_DISPLAY}" ] && [ "${XDG_VTNR}" -eq 1 ]; then
+          #     exec dbus-run-session Hyprland
+          # fi
+    - name: Set ownership .bash_profile
+      become: true
+      ansible.builtin.command: >-
+        chroot /mnt/gentoo chown {{ username }}:{{ username }} /home/{{ username }}/.bash_profile
+      changed_when: false
+  when: login_style == 'tty'
+
+# 5. SMOKE TEST PRECONDITION (Validasi cepat sebelum reboot)
+# ---------------------------------------------------------
+- name: Verifikasi precondition Wayland stack
+  become: true
+  ansible.builtin.shell: |
+    errors=""
+
+    # Cek binary kritis tersedia di target chroot
+    for bin in Hyprland dbus-daemon; do
+      chroot /mnt/gentoo which "$bin" >/dev/null 2>&1 || errors="${errors}Binary ${bin} tidak ditemukan\n"
+    done
+
+    {% if login_style == 'dm' %}
+    for bin in greetd tuigreet; do
+      chroot /mnt/gentoo which "$bin" >/dev/null 2>&1 || errors="${errors}Binary ${bin} tidak ditemukan\n"
+    done
+    [ -f /mnt/gentoo/etc/greetd/config.toml ] || errors="${errors}Konfigurasi greetd tidak ditemukan (/etc/greetd/config.toml)\n"
+    {% endif %}
+
+    {% if init_system == 'openrc' %}
+    chroot /mnt/gentoo which loginctl >/dev/null 2>&1 || errors="${errors}Binary loginctl tidak ditemukan (elogind belum siap)\n"
+    {% endif %}
+
+    {% if gpu_vendor == 'nvidia' %}
+    [ -f /mnt/gentoo/etc/modules-load.d/nvidia.conf ] || errors="${errors}Konfigurasi modul NVIDIA tidak ditemukan (/etc/modules-load.d/nvidia.conf)\n"
+    {% endif %}
+
+    if [ -n "$errors" ]; then
+      printf "%b" "$errors"
+      exit 1
+    fi
+  args:
+    executable: /bin/bash
+  changed_when: false

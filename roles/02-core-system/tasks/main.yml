@@ -1,0 +1,210 @@
+---
+# ==============================================================================
+# OMGENTLY: ROLE 02 - CORE SYSTEM & CHROOT
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. DOWNLOAD STAGE3 DENGAN PERLINDUNGAN EKSTRA
+# ------------------------------------------------------------------------------
+- name: Ambil isi file indeks Stage3 terbaru
+  ansible.builtin.uri:
+    url: "{{ gentoo_mirror }}/releases/amd64/autobuilds/latest-stage3-amd64-{{ init_system }}.txt"
+    return_content: true
+  register: stage3_txt
+  failed_when: stage3_txt.status != 200
+
+- name: Parsing path tarball menggunakan regex
+  ansible.builtin.set_fact:
+    stage3_path: "{{ (stage3_txt.content | regex_findall('(?m)^(?!#)([^\\s]+stage3-amd64-' + init_system + '-[0-9TZ]+\\.tar\\.(?:xz|bz2))\\s+') | first | default('')) }}"
+
+- name: Validasi path Stage3 berhasil diparsing
+  ansible.builtin.assert:
+    that:
+      - stage3_path is defined
+      - stage3_path | length > 0
+    fail_msg: "Gagal mem-parsing path Stage3 dari indeks mirror. Periksa mirror atau init_system yang dipilih."
+
+- name: Set metadata Stage3
+  ansible.builtin.set_fact:
+    stage3_archive_name: "{{ stage3_path | basename }}"
+    stage3_archive_dest: "/mnt/gentoo/{{ stage3_path | basename }}"
+
+- name: Ambil file DIGESTS untuk verifikasi checksum
+  ansible.builtin.uri:
+    url: "{{ gentoo_mirror }}/releases/amd64/autobuilds/{{ stage3_path }}.DIGESTS"
+    return_content: true
+  register: stage3_digests
+  failed_when: stage3_digests.status != 200
+
+- name: Validasi section SHA512 tersedia di DIGESTS
+  ansible.builtin.assert:
+    that:
+      - "'# SHA512 HASH' in stage3_digests.content"
+    fail_msg: "Section SHA512 HASH tidak ditemukan pada file DIGESTS."
+
+- name: Ambil section SHA512 dari DIGESTS
+  ansible.builtin.set_fact:
+    stage3_digests_sha512_section: "{{ (stage3_digests.content | regex_search('(?s)# SHA512 HASH\\n(.*?)(\\n# |\\Z)', '\\1') | first | default('')) }}"
+
+- name: Ekstrak SHA512 hash dari DIGESTS
+  ansible.builtin.set_fact:
+    stage3_sha512: "{{ (stage3_digests_sha512_section | regex_findall('(?m)^([a-f0-9]{128})\\s+\\*?' + (stage3_archive_name | regex_escape) + '$') | first | default('')) }}"
+
+- name: Validasi checksum SHA512 ditemukan
+  ansible.builtin.assert:
+    that:
+      - stage3_sha512 is defined
+      - stage3_sha512 | length == 128
+    fail_msg: "Checksum SHA512 untuk {{ stage3_archive_name }} tidak ditemukan di file DIGESTS."
+
+- name: Download Stage3 Tarball dengan verifikasi Checksum
+  ansible.builtin.get_url:
+    url: "{{ gentoo_mirror }}/releases/amd64/autobuilds/{{ stage3_path }}"
+    dest: "{{ stage3_archive_dest }}"
+    checksum: "sha512:{{ stage3_sha512 }}"
+    mode: '0644'
+
+- name: Ekstrak Stage3 ke /mnt/gentoo
+  ansible.builtin.unarchive:
+    src: "{{ stage3_archive_dest }}"
+    dest: /mnt/gentoo
+    remote_src: true
+    extra_opts: ['--numeric-owner', '--xattrs-include=*.*']
+    creates: /mnt/gentoo/bin/bash
+
+# ------------------------------------------------------------------------------
+# 2. CHROOT PREPARATION (Gentoo Handbook Strict Compliance)
+# ------------------------------------------------------------------------------
+- name: Copy resolv.conf (Akses Internet Chroot)
+  ansible.builtin.copy:
+    src: /etc/resolv.conf
+    dest: /mnt/gentoo/etc/resolv.conf
+    mode: '0644'
+    remote_src: true
+
+- name: Mount /proc
+  ansible.builtin.shell: |
+    if mountpoint -q /mnt/gentoo/proc; then
+      echo "already-mounted"
+    else
+      mount -t proc proc /mnt/gentoo/proc
+      echo "mounted"
+    fi
+  register: proc_mount_result
+  changed_when: (proc_mount_result.stdout | trim) == 'mounted'
+
+- name: Bind mount /sys dan /dev
+  ansible.builtin.shell: |
+    if mountpoint -q /mnt/gentoo/{{ item }}; then
+      echo "already-mounted"
+    else
+      mount --rbind /{{ item }} /mnt/gentoo/{{ item }}
+      echo "mounted"
+    fi
+  loop: [ sys, dev ]
+  # changed_when dievaluasi per-item saat loop berjalan.
+  register: bind_mount_item_result
+  changed_when: (bind_mount_item_result.stdout | trim) == 'mounted'
+
+- name: Jadikan /sys dan /dev sebagai rslave (Mencegah umount merusak Host)
+  ansible.builtin.command: "mount --make-rslave /mnt/gentoo/{{ item }}"
+  loop: [ sys, dev ]
+  changed_when: false
+
+# ------------------------------------------------------------------------------
+# 3. PORTAGE CONFIGURATION & SAFE SYNC
+# ------------------------------------------------------------------------------
+- name: Generate make.conf dinamis
+  ansible.builtin.template:
+    src: make.conf.j2
+    dest: /mnt/gentoo/etc/portage/make.conf
+    mode: '0644'
+
+- name: Pastikan direktori repos.conf tersedia
+  ansible.builtin.file:
+    path: /mnt/gentoo/etc/portage/repos.conf
+    state: directory
+    mode: '0755'
+
+- name: Setup repos.conf (Git Sync)
+  ansible.builtin.copy:
+    dest: /mnt/gentoo/etc/portage/repos.conf/gentoo.conf
+    mode: '0644'
+    content: |
+      [DEFAULT]
+      main-repo = gentoo
+      [gentoo]
+      location = /var/db/repos/gentoo
+      sync-type = git
+      sync-uri = {{ portage_sync_uri | default('https://github.com/gentoo-mirror/gentoo.git') }}
+      auto-sync = yes
+      sync-depth = 1
+
+- name: Cek apakah Portage Tree Git sudah ada
+  ansible.builtin.stat:
+    path: /mnt/gentoo/var/db/repos/gentoo/.git
+  register: portage_git_check
+
+- name: Blok Safe Bootstrap Portage Tree
+  when: not portage_git_check.stat.exists
+  block:
+    - name: Bootstrap portage tree awal (webrsync)
+      ansible.builtin.command: chroot /mnt/gentoo emerge-webrsync
+
+    - name: Install git
+      ansible.builtin.command: chroot /mnt/gentoo emerge --oneshot dev-vcs/git
+
+    - name: Backup webrsync snapshot (Failsafe)
+      ansible.builtin.command: chroot /mnt/gentoo cp -a /var/db/repos/gentoo /var/db/repos/gentoo.bak
+
+    - name: Clear portage directory dan Git Sync
+      block:
+        - name: Hapus isi portage tree lama (termasuk hidden files)
+          ansible.builtin.command: chroot /mnt/gentoo find /var/db/repos/gentoo -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+        - name: Sinkronisasi via Git
+          ansible.builtin.command: chroot /mnt/gentoo emaint sync -a
+
+        - name: Hapus backup webrsync setelah Git Sync sukses
+          ansible.builtin.command: chroot /mnt/gentoo rm -rf /var/db/repos/gentoo.bak
+      rescue:
+        - name: RESCUE - Kembalikan backup webrsync jika Git Sync gagal!
+          ansible.builtin.command: chroot /mnt/gentoo bash -c "rm -rf /var/db/repos/gentoo && mv /var/db/repos/gentoo.bak /var/db/repos/gentoo"
+          ignore_errors: true
+        - name: Hentikan eksekusi
+          ansible.builtin.fail:
+            msg: "Gagal melakukan Git Sync pada portage tree. Snapshot dikembalikan, silakan cek koneksi internet GitHub."
+
+- name: Sinkronisasi Portage Tree Git (rerun)
+  ansible.builtin.command: chroot /mnt/gentoo emaint sync -a
+  when: portage_git_check.stat.exists
+
+# ------------------------------------------------------------------------------
+# 4. OVERLAY GURU (Idempotent)
+# ------------------------------------------------------------------------------
+- name: Cek ketersediaan eselect-repository
+  ansible.builtin.command: chroot /mnt/gentoo bash -c "command -v eselect && eselect repository list"
+  register: eselect_repo_check
+  failed_when: false
+  changed_when: false
+
+- name: Instal eselect-repository
+  ansible.builtin.command: chroot /mnt/gentoo emerge --oneshot app-eselect/eselect-repository
+  when: eselect_repo_check.rc != 0
+
+- name: Cek apakah GURU sudah aktif
+  ansible.builtin.command: chroot /mnt/gentoo eselect repository list
+  register: repo_list
+  changed_when: false
+
+- name: Aktifkan GURU Overlay
+  ansible.builtin.command: chroot /mnt/gentoo eselect repository enable guru
+  when: "'guru' not in repo_list.stdout"
+
+- name: Cek apakah repo GURU sudah tersedia secara lokal
+  ansible.builtin.stat:
+    path: /mnt/gentoo/var/db/repos/guru/.git
+  register: guru_repo_check
+
+- name: Sinkronisasi GURU jika belum tersedia
+  ansible.builtin.command: chroot /mnt/gentoo emaint sync -r guru
+  when: not guru_repo_check.stat.exists

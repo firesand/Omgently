@@ -1,0 +1,19 @@
+#!/bin/bash
+# omgently-launch-or-focus: fokus window existing, launch bila belum ada.
+set -euo pipefail
+
+if [ "$#" -lt 2 ]; then
+    echo "Usage: omgently-launch-or-focus <class-pattern> <command> [args...]"
+    exit 1
+fi
+
+CLASS_PATTERN="$1"
+shift
+
+if hyprctl clients -j | grep -Eiq "\"class\"[[:space:]]*:[[:space:]]*\"[^\"]*${CLASS_PATTERN}[^\"]*\""; then
+    if ! hyprctl dispatch focuswindow "class:(${CLASS_PATTERN})" >/dev/null 2>&1; then
+        exec "$@"
+    fi
+else
+    exec "$@"
+fi

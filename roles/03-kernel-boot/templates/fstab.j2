@@ -1,0 +1,19 @@
+{% if filesystem == 'btrfs' %}
+UUID={{ blkid_root.stdout | trim }} / btrfs subvol=@,compress=zstd:1,noatime 0 0
+{% if partition_layout == 'flat' %}
+UUID={{ blkid_root.stdout | trim }} /home btrfs subvol=@home,compress=zstd:1,noatime 0 0
+{% else %}
+UUID={{ blkid_home.stdout | trim }} /home btrfs compress=zstd:1,noatime 0 0
+{% endif %}
+UUID={{ blkid_root.stdout | trim }} /var/db/repos/gentoo btrfs subvol=@portage,compress=zstd:1,noatime 0 0
+UUID={{ blkid_root.stdout | trim }} /var/cache/distfiles btrfs subvol=@distfiles,compress=zstd:1,noatime 0 0
+UUID={{ blkid_root.stdout | trim }} /.snapshots btrfs subvol=@snapshots,compress=zstd:1,noatime 0 0
+{% else %}
+UUID={{ blkid_root.stdout | trim }} / {{ filesystem }} noatime 0 1
+{% if partition_layout == 'separate_home' %}
+UUID={{ blkid_home.stdout | trim }} /home {{ filesystem }} noatime 0 2
+{% endif %}
+{% endif %}
+UUID={{ blkid_swap.stdout | trim }} none swap sw 0 0
+UUID={{ blkid_efi.stdout | trim }} /boot/efi vfat noatime 0 2
+tmpfs /tmp tmpfs defaults,noatime,mode=1777 0 0

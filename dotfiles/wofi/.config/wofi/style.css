@@ -1,0 +1,59 @@
+/* ═══════════════════════════════════════════════════════════
+ *  OMGENTLY WOFI — Tokyo Night
+ *  Aesthetic: Floating, Sharp-cornered, Minimal
+ * ═══════════════════════════════════════════════════════════ */
+
+window {
+    background-color: #1a1b26;
+    border: 2px solid #7aa2f7;
+    border-radius: 0;
+    font-family: 'JetBrainsMono Nerd Font', monospace;
+    font-size: 13px;
+}
+
+#input {
+    background-color: #24283b;
+    color: #a9b1d6;
+    border: none;
+    border-bottom: 2px solid #414868;
+    border-radius: 0;
+    padding: 10px 14px;
+    margin: 8px;
+    font-size: 14px;
+}
+
+#input:focus {
+    border-bottom-color: #7aa2f7;
+}
+
+#inner-box {
+    margin: 0 8px 8px 8px;
+}
+
+#outer-box {
+    padding: 0;
+}
+
+#text {
+    color: #a9b1d6;
+    margin-left: 8px;
+}
+
+#entry {
+    padding: 6px 8px;
+    border-radius: 0;
+}
+
+#entry:selected {
+    background-color: #24283b;
+    border-left: 3px solid #7aa2f7;
+}
+
+#entry:selected #text {
+    color: #c0caf5;
+    font-weight: bold;
+}
+
+image {
+    margin-right: 4px;
+}

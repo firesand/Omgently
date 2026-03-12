@@ -1,0 +1,38 @@
+# ==============================================================================
+# OMGENTLY: MAKE.CONF (Optimasi & Stabilitas)
+# ==============================================================================
+
+COMMON_FLAGS="-O2 -pipe -march={{ march_target }} {{ advanced_cflags | default('') }}"
+CFLAGS="${COMMON_FLAGS}"
+CXXFLAGS="${COMMON_FLAGS}"
+FCFLAGS="${COMMON_FLAGS}"
+FFLAGS="${COMMON_FLAGS}"
+
+# Thread per package
+MAKEOPTS="{{ makeopts }}"
+
+# Mencegah OOM: default konservatif, bisa di-override via emerge_jobs/emerge_load_average
+EMERGE_DEFAULT_OPTS="--jobs={{ emerge_jobs | default([ (cpu_threads | int // 4), 1 ] | max) }} --load-average={{ emerge_load_average | default(cpu_threads) }} --keep-going --verbose"
+
+# Mirror statis dari TUI (Menggantikan mirrorselect)
+GENTOO_MIRRORS="{{ gentoo_mirror }}"
+
+VIDEO_CARDS="{% if gpu_vendor == 'nvidia' %}nvidia{% elif gpu_vendor == 'amd' %}amdgpu radeonsi{% else %}intel i915 xe{% endif %}"
+INPUT_DEVICES="libinput"
+
+# Lisensi (Dapat diubah user nantinya jika strictly open-source)
+ACCEPT_LICENSE="{{ accept_license | default('*') }}"
+ACCEPT_KEYWORDS="{{ accept_keywords | default('amd64') }}"
+
+# Lokalisasi
+L10N="{{ system_locale | split('.') | first | lower | replace('_', '-') }}"
+LC_MESSAGES=C.utf8
+
+# USE Flags:
+# Fokus default Omgently adalah stack Wayland + Hyprland minimal, sehingga X11/DE berat dimatikan.
+BASE_USE="wayland pipewire opengl vulkan egl dbus udev polkit custom-cflags"
+# Catatan: -bluetooth dihapus dari BLOAT_DROP agar ekosistem laptop tetap berfungsi
+BLOAT_DROP="-xorg -X -gnome -kde -plasma -dvd -cdrom"
+INIT_USE="{{ 'systemd -elogind' if init_system == 'systemd' else 'elogind -systemd' }}"
+
+USE="${BASE_USE} ${BLOAT_DROP} ${INIT_USE}"

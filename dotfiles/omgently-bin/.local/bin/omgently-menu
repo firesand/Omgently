@@ -1,0 +1,147 @@
+#!/bin/bash
+# ╔══════════════════════════════════════════════════════════╗
+# ║           OMGENTLY MENU — Central Command Hub           ║
+# ╚══════════════════════════════════════════════════════════╝
+set -euo pipefail
+
+CONFIGS_DIR="$HOME/.config"
+DOTFILES_DIR="$HOME/.dotfiles"
+TERMINAL="${XDG_TERMINAL:-ghostty}"
+
+# ── Submenu Helpers ───────────────────────────────────────
+wofi_menu() {
+    printf "%s\n" "$@" | wofi --show dmenu --prompt "Omgently" --cache-file=/dev/null
+}
+
+notify() {
+    notify-send "Omgently" "$1" -t 3000
+}
+
+edit_config() {
+    local file="$1"
+    if [ -f "$file" ]; then
+        $TERMINAL -e nvim "$file"
+    else
+        notify "File tidak ditemukan: $file"
+    fi
+}
+
+# ── Setup Submenu ─────────────────────────────────────────
+menu_setup() {
+    local chosen
+    chosen=$(wofi_menu \
+        "  Hyprland Config" \
+        "  Keybindings" \
+        "  Input (Keyboard/Mouse)" \
+        "  Waybar Config" \
+        "  Waybar Style" \
+        "  Wofi Config" \
+        "  Mako (Notifikasi)" \
+        "  Terminal Config" \
+        "  Neovim Config" \
+        "← Kembali"
+    ) || return
+
+    case "$chosen" in
+        *"Hyprland Config"*)  edit_config "$CONFIGS_DIR/hypr/hyprland.conf" ;;
+        *"Keybindings"*)      edit_config "$CONFIGS_DIR/hypr/bindings.conf" ;;
+        *"Input"*)            edit_config "$CONFIGS_DIR/hypr/input.conf" ;;
+        *"Waybar Config"*)    edit_config "$CONFIGS_DIR/waybar/config.jsonc" ;;
+        *"Waybar Style"*)     edit_config "$CONFIGS_DIR/waybar/style.css" ;;
+        *"Wofi Config"*)      edit_config "$CONFIGS_DIR/wofi/config" ;;
+        *"Mako"*)             edit_config "$CONFIGS_DIR/mako/config" ;;
+        *"Terminal"*)         edit_config "$(find "$CONFIGS_DIR" -maxdepth 2 \( -path "*/ghostty/config" -o -path "*/alacritty/alacritty.toml" -o -path "*/kitty/kitty.conf" \) | head -1)" ;;
+        *"Neovim"*)           edit_config "$CONFIGS_DIR/nvim/init.lua" ;;
+        *"Kembali"*)          main_menu ;;
+    esac
+}
+
+# ── Style Submenu ─────────────────────────────────────────
+menu_style() {
+    local chosen
+    chosen=$(wofi_menu \
+        "  Edit Look & Feel" \
+        "  Edit Theme Colors" \
+        "  Edit Wallpaper Config" \
+        "  Reload Waybar" \
+        "  Reload Hyprland" \
+        "← Kembali"
+    ) || return
+
+    case "$chosen" in
+        *"Look & Feel"*)       edit_config "$CONFIGS_DIR/hypr/looknfeel.conf" ;;
+        *"Theme Colors"*)      edit_config "$CONFIGS_DIR/hypr/theme.conf" ;;
+        *"Wallpaper"*)         edit_config "$CONFIGS_DIR/hypr/hyprpaper.conf" ;;
+        *"Reload Waybar"*)     killall -SIGUSR2 waybar 2>/dev/null || (killall waybar; waybar &); notify "Waybar di-reload" ;;
+        *"Reload Hyprland"*)   hyprctl reload; notify "Hyprland di-reload" ;;
+        *"Kembali"*)           main_menu ;;
+    esac
+}
+
+# ── Tools Submenu ─────────────────────────────────────────
+menu_tools() {
+    local chosen
+    chosen=$(wofi_menu \
+        "  Screenshot (Region)" \
+        "  Screenshot (Fullscreen)" \
+        "  Toggle Screen Recording" \
+        "  Color Picker" \
+        "  Clipboard History" \
+        "  System Monitor (btop)" \
+        "  Disk Usage (ncdu)" \
+        "← Kembali"
+    ) || return
+
+    case "$chosen" in
+        *"Region"*)         grim -g "$(slurp)" - | wl-copy && notify "Screenshot disalin ke clipboard" ;;
+        *"Fullscreen"*)     grim - | wl-copy && notify "Screenshot fullscreen disalin ke clipboard" ;;
+        *"Screen Recording"*) omgently-screenrecord ;;
+        *"Color Picker"*)   grim -g "$(slurp -p)" -t ppm - | convert - -format '%[pixel:p{0,0}]' txt:- | tail -1 | wl-copy && notify "Warna disalin ke clipboard" ;;
+        *"Clipboard"*)      cliphist list | wofi --show dmenu --prompt "Clipboard" | cliphist decode | wl-copy ;;
+        *"btop"*)           $TERMINAL -e btop ;;
+        *"ncdu"*)           $TERMINAL -e ncdu ~ ;;
+        *"Kembali"*)        main_menu ;;
+    esac
+}
+
+# ── Power Submenu ─────────────────────────────────────────
+menu_power() {
+    local chosen
+    chosen=$(wofi_menu \
+        "  Lock Screen" \
+        "  Reload Hyprland" \
+        "  Logout Hyprland" \
+        "  Reboot" \
+        "⏻  Shutdown" \
+        "← Kembali"
+    ) || return
+
+    case "$chosen" in
+        *"Lock"*)       hyprlock ;;
+        *"Reload"*)     hyprctl reload ;;
+        *"Logout"*)     hyprctl dispatch exit ;;
+        *"Reboot"*)     systemctl reboot 2>/dev/null || loginctl reboot ;;
+        *"Shutdown"*)   systemctl poweroff 2>/dev/null || loginctl poweroff ;;
+        *"Kembali"*)    main_menu ;;
+    esac
+}
+
+# ── Main Menu ─────────────────────────────────────────────
+main_menu() {
+    local chosen
+    chosen=$(wofi_menu \
+        "  Setup Configs" \
+        "  Style & Appearance" \
+        "  Tools & Utilities" \
+        "⏻  Power"
+    ) || exit 0
+
+    case "$chosen" in
+        *"Setup"*)    menu_setup ;;
+        *"Style"*)    menu_style ;;
+        *"Tools"*)    menu_tools ;;
+        *"Power"*)    menu_power ;;
+    esac
+}
+
+main_menu

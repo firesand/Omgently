@@ -1,0 +1,27 @@
+# ── Omgently Mako — Tokyo Night ──────────────────────────
+max-visible=3
+sort=-time
+layer=overlay
+anchor=top-right
+
+font=JetBrainsMono Nerd Font 11
+background-color=#24283b
+text-color=#a9b1d6
+border-color=#7aa2f7
+border-size=2
+border-radius=0
+padding=12
+margin=10
+width=320
+height=120
+default-timeout=5000
+ignore-timeout=0
+
+[urgency=low]
+border-color=#565f89
+default-timeout=3000
+
+[urgency=high]
+border-color=#f7768e
+text-color=#c0caf5
+default-timeout=0

@@ -1,0 +1,30 @@
+#!/bin/bash
+# omgently-screenrecord: toggle screen recording dengan wf-recorder.
+set -euo pipefail
+
+PIDFILE="/tmp/omgently-screenrecord.pid"
+STATEFILE="/tmp/omgently-screenrecord.out"
+OUTDIR="${HOME}/Videos/Recordings"
+mkdir -p "$OUTDIR"
+
+if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+    kill "$(cat "$PIDFILE")"
+    rm -f "$PIDFILE"
+    if [ -f "$STATEFILE" ]; then
+        notify-send "Screen Recording" "Rekaman disimpan: $(cat "$STATEFILE")" -t 3000
+        rm -f "$STATEFILE"
+    else
+        notify-send "Screen Recording" "Rekaman dihentikan" -t 3000
+    fi
+    exit 0
+fi
+
+FILENAME="recording-$(date +%Y%m%d-%H%M%S).mp4"
+OUTFILE="${OUTDIR}/${FILENAME}"
+
+wf-recorder -f "$OUTFILE" >/dev/null 2>&1 &
+RECORD_PID=$!
+
+echo "$RECORD_PID" > "$PIDFILE"
+echo "$OUTFILE" > "$STATEFILE"
+notify-send "Screen Recording" "Merekam... tekan lagi untuk berhenti" -t 3000

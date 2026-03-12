@@ -1,0 +1,263 @@
+---
+# 1. THE MODERN CLI ARSENAL
+# ---------------------------------------------------------
+- name: Instal Alat Produktivitas Modern (Neovim, eza, ripgrep, fd, fzf, bat)
+  become: true
+  ansible.builtin.command: >-
+    chroot /mnt/gentoo emerge --quiet --noreplace
+    app-editors/neovim
+    sys-apps/eza
+    sys-apps/ripgrep
+    sys-apps/fd
+    app-shells/fzf
+    sys-apps/bat
+
+# 2. TERMINAL EMULATOR DINAMIS
+# ---------------------------------------------------------
+- name: Instal Terminal (Alacritty)
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace x11-terms/alacritty
+  when: default_terminal == 'alacritty'
+
+- name: Instal Terminal (Kitty)
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace x11-terms/kitty
+  when: default_terminal == 'kitty'
+
+- name: Instal Terminal (Ghostty via GURU Overlay)
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace x11-terms/ghostty
+  when: default_terminal == 'ghostty'
+
+# 3. WEB BROWSER
+# ---------------------------------------------------------
+- name: Instal Browser (Brave Bin)
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace www-client/brave-bin
+  when: default_browser == 'brave'
+
+- name: Instal Browser (Firefox Bin)
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace www-client/firefox-bin
+  when: default_browser == 'firefox'
+
+# 4. INJEKSI DOTFILES OMARCHY
+# ---------------------------------------------------------
+- name: Setup Dotfiles Manager (GNU Stow)
+  block:
+    - name: Instal GNU Stow
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace app-admin/stow
+
+    - name: Clone repositori Dotfiles (Eksekusi sebagai User Utama)
+      become: true
+      ansible.builtin.command: >-
+        chroot /mnt/gentoo su - {{ username }} -c "
+        git clone {{ dotfiles_repo_url | default('https://github.com/edo/gentoo-omarchy-dotfiles.git') }} ~/.dotfiles
+        "
+      args:
+        creates: /mnt/gentoo/home/{{ username }}/.dotfiles/.git
+
+    - name: Verifikasi folder Stow tersedia
+      become: true
+      ansible.builtin.shell: |
+        errors=""
+        for dir in hyprland waybar wofi mako hyprpaper hyprlock hypridle nvim bash omgently-bin desktop-entries gtk {{ default_terminal }}; do
+          [ -d /mnt/gentoo/home/{{ username }}/.dotfiles/$dir ] || errors="${errors}Folder stow '${dir}' tidak ada di repo dotfiles\n"
+        done
+        if [ -n "$errors" ]; then
+          printf "%b" "$errors"
+          exit 1
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Eksekusi Stow untuk membuat symlink konfigurasi
+      become: true
+      ansible.builtin.command: >-
+        chroot /mnt/gentoo su - {{ username }} -c "
+        cd ~/.dotfiles && stow --restow hyprland waybar wofi mako hyprpaper hyprlock hypridle nvim bash omgently-bin desktop-entries gtk {{ default_terminal }}
+        "
+
+    - name: Cek keberadaan hyprland.conf hasil stow
+      become: true
+      ansible.builtin.stat:
+        path: /mnt/gentoo/home/{{ username }}/.config/hypr/hyprland.conf
+      register: hypr_conf_after_stow
+
+    - name: Cek keberadaan monitors.conf hasil stow
+      become: true
+      ansible.builtin.stat:
+        path: /mnt/gentoo/home/{{ username }}/.config/hypr/monitors.conf
+      register: hypr_monitors_after_stow
+      when: hypr_conf_after_stow.stat.exists
+
+    - name: Validasi monitors.conf tersedia setelah stow
+      ansible.builtin.assert:
+        that:
+          - hypr_monitors_after_stow.stat.exists
+        fail_msg: "monitors.conf tidak ditemukan setelah stow. Pastikan file tersedia di dotfiles/hyprland/.config/hypr/monitors.conf"
+      when: hypr_conf_after_stow.stat.exists
+
+    - name: Set executable permission untuk omgently scripts
+      become: true
+      ansible.builtin.command: >-
+        chroot /mnt/gentoo chmod +x
+        /home/{{ username }}/.local/bin/omgently-menu
+        /home/{{ username }}/.local/bin/omgently-screenshot
+        /home/{{ username }}/.local/bin/omgently-launch-or-focus
+        /home/{{ username }}/.local/bin/omgently-screenrecord
+      changed_when: false
+      when: hypr_conf_after_stow.stat.exists
+
+    - name: Pastikan .bash_profile source .bashrc
+      become: true
+      ansible.builtin.lineinfile:
+        path: /mnt/gentoo/home/{{ username }}/.bash_profile
+        regexp: '^\[.*-f.*\.bashrc.*\].*&&.*source'
+        line: '[[ -f ~/.bashrc ]] && source ~/.bashrc'
+        state: present
+        create: true
+
+    - name: Fix ownership .bash_profile
+      become: true
+      ansible.builtin.command: >-
+        chroot /mnt/gentoo chown {{ username }}:{{ username }} /home/{{ username }}/.bash_profile
+      changed_when: false
+
+    - name: Pastikan autostart polkit agent robust
+      become: true
+      ansible.builtin.lineinfile:
+        path: /mnt/gentoo/home/{{ username }}/.config/hypr/autostart.conf
+        follow: true
+        regexp: '^\s*exec-once\s*=\s*.*lxqt-policykit-agent.*$'
+        line: "exec-once = sh -c 'if [ -x /usr/libexec/lxqt-policykit-agent ]; then exec /usr/libexec/lxqt-policykit-agent; elif [ -x /usr/lib/lxqt-policykit-agent ]; then exec /usr/lib/lxqt-policykit-agent; fi' &"
+        state: present
+      when: hypr_conf_after_stow.stat.exists
+
+    - name: Pastikan autostart Pipewire
+      become: true
+      ansible.builtin.lineinfile:
+        path: /mnt/gentoo/home/{{ username }}/.config/hypr/autostart.conf
+        follow: true
+        regexp: '^\s*exec-once\s*=\s*.*\bpipewire\b.*$'
+        line: 'exec-once = pipewire &'
+        state: present
+      when: hypr_conf_after_stow.stat.exists
+
+    - name: Pastikan autostart Wireplumber
+      become: true
+      ansible.builtin.lineinfile:
+        path: /mnt/gentoo/home/{{ username }}/.config/hypr/autostart.conf
+        follow: true
+        regexp: '^\s*exec-once\s*=\s*.*\bwireplumber\b.*$'
+        line: 'exec-once = wireplumber &'
+        state: present
+      when: hypr_conf_after_stow.stat.exists
+
+    - name: Set terminal keybinding sesuai pilihan user
+      become: true
+      ansible.builtin.lineinfile:
+        path: /mnt/gentoo/home/{{ username }}/.config/hypr/bindings.conf
+        follow: true
+        regexp: '^\s*bind\s*=\s*\$mainMod,\s*Return,\s*exec,'
+        line: 'bind = $mainMod, Return, exec, {{ default_terminal }}'
+        state: present
+      when: hypr_conf_after_stow.stat.exists
+
+    - name: Pastikan autostart Hyprpaper
+      become: true
+      ansible.builtin.lineinfile:
+        path: /mnt/gentoo/home/{{ username }}/.config/hypr/autostart.conf
+        follow: true
+        regexp: '^\s*exec-once\s*=\s*.*\bhyprpaper\b.*$'
+        line: 'exec-once = hyprpaper &'
+        state: present
+      when: hypr_conf_after_stow.stat.exists
+
+    - name: Pastikan autostart Hypridle
+      become: true
+      ansible.builtin.lineinfile:
+        path: /mnt/gentoo/home/{{ username }}/.config/hypr/autostart.conf
+        follow: true
+        regexp: '^\s*exec-once\s*=\s*.*\bhypridle\b.*$'
+        line: 'exec-once = hypridle &'
+        state: present
+      when: hypr_conf_after_stow.stat.exists
+
+    - name: Pastikan autostart cliphist daemon
+      become: true
+      ansible.builtin.lineinfile:
+        path: /mnt/gentoo/home/{{ username }}/.config/hypr/autostart.conf
+        follow: true
+        regexp: '^\s*exec-once\s*=\s*.*cliphist\s+store.*$'
+        line: 'exec-once = wl-paste --type text --watch cliphist store &'
+        state: present
+      when: hypr_conf_after_stow.stat.exists
+
+    - name: Pastikan autostart SwayOSD server
+      become: true
+      ansible.builtin.lineinfile:
+        path: /mnt/gentoo/home/{{ username }}/.config/hypr/autostart.conf
+        follow: true
+        regexp: '^\s*exec-once\s*=\s*.*\bswayosd-server\b.*$'
+        line: 'exec-once = swayosd-server &'
+        state: present
+      when: hypr_conf_after_stow.stat.exists
+
+    - name: Hapus env NVIDIA global di hyprland.conf
+      become: true
+      ansible.builtin.lineinfile:
+        path: /mnt/gentoo/home/{{ username }}/.config/hypr/hyprland.conf
+        follow: true
+        regexp: '^env\s*=\s*(LIBVA_DRIVER_NAME,|GBM_BACKEND,|__GLX_VENDOR_LIBRARY_NAME,|WLR_NO_HARDWARE_CURSORS,|AQ_NO_HARDWARE_CURSORS,)'
+        state: absent
+      when: hypr_conf_after_stow.stat.exists
+
+    - name: Tambah env NVIDIA khusus vendor di hyprland.conf
+      become: true
+      ansible.builtin.blockinfile:
+        path: /mnt/gentoo/home/{{ username }}/.config/hypr/hyprland.conf
+        follow: true
+        marker: '# {mark} Omgently NVIDIA Env'
+        insertafter: '^env = CLUTTER_BACKEND'
+        block: |
+          env = LIBVA_DRIVER_NAME,nvidia
+          env = GBM_BACKEND,nvidia-drm
+          env = __GLX_VENDOR_LIBRARY_NAME,nvidia
+          # Safety net: paksa software cursor untuk kompatibilitas NVIDIA
+          env = AQ_NO_HARDWARE_CURSORS,1
+      when:
+        - hypr_conf_after_stow.stat.exists
+        - gpu_vendor == 'nvidia'
+
+    - name: Hapus block env NVIDIA untuk non-NVIDIA
+      become: true
+      ansible.builtin.blockinfile:
+        path: /mnt/gentoo/home/{{ username }}/.config/hypr/hyprland.conf
+        follow: true
+        marker: '# {mark} Omgently NVIDIA Env'
+        state: absent
+      when:
+        - hypr_conf_after_stow.stat.exists
+        - gpu_vendor != 'nvidia'
+
+    - name: Fix ownership seluruh .config setelah modifikasi
+      become: true
+      ansible.builtin.command: >-
+        chroot /mnt/gentoo chown -R {{ username }}:{{ username }} /home/{{ username }}/.config
+      changed_when: false
+      when: hypr_conf_after_stow.stat.exists
+  when: install_omarchy_dotfiles | bool
+
+# 5. SENTUHAN AKHIR & PEMBERSIHAN
+# ---------------------------------------------------------
+- name: Bersihkan cache distfiles Portage
+  block:
+    - name: Instal gentoolkit untuk utilitas eclean-dist
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace app-portage/gentoolkit
+    - name: Bersihkan cache distfiles Portage
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo eclean-dist -d

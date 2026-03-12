@@ -1,0 +1,23 @@
+#!/bin/bash
+# omgently-screenshot: Screenshot dengan notifikasi
+set -euo pipefail
+
+SCREENSHOTS_DIR="${HOME}/Pictures/Screenshots"
+mkdir -p "$SCREENSHOTS_DIR"
+FILENAME="screenshot-$(date +%Y%m%d-%H%M%S).png"
+FILEPATH="${SCREENSHOTS_DIR}/${FILENAME}"
+
+case "${1:-region}" in
+    region)
+        grim -g "$(slurp)" - | swappy -f - -o "$FILEPATH" && wl-copy < "$FILEPATH"
+        notify-send "Screenshot" "Annotated & disalin" -i "$FILEPATH" -t 3000
+        ;;
+    full)
+        grim "$FILEPATH" && wl-copy < "$FILEPATH"
+        notify-send "Screenshot" "Fullscreen disimpan & disalin" -i "$FILEPATH" -t 3000
+        ;;
+    *)
+        echo "Usage: omgently-screenshot [region|full]"
+        exit 1
+        ;;
+esac

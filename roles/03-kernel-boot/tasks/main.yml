@@ -1,0 +1,306 @@
+---
+- name: Ambil UUID root
+  become: true
+  ansible.builtin.command: blkid -s UUID -o value {{ part_root }}
+  register: blkid_root
+  changed_when: false
+
+- name: Ambil UUID swap
+  become: true
+  ansible.builtin.command: blkid -s UUID -o value {{ part_swap }}
+  register: blkid_swap
+  changed_when: false
+
+- name: Ambil UUID EFI
+  become: true
+  ansible.builtin.command: blkid -s UUID -o value {{ part_efi }}
+  register: blkid_efi
+  changed_when: false
+
+- name: Ambil UUID home (layout terpisah)
+  become: true
+  ansible.builtin.command: blkid -s UUID -o value {{ part_home }}
+  register: blkid_home
+  changed_when: false
+  when: partition_layout == 'separate_home'
+
+- name: Validasi UUID partisi wajib tersedia
+  ansible.builtin.assert:
+    that:
+      - blkid_root.stdout | trim | length > 0
+      - blkid_swap.stdout | trim | length > 0
+      - blkid_efi.stdout | trim | length > 0
+    fail_msg: "Gagal membaca UUID partisi root/swap/EFI. Pastikan partisi sudah diformat dengan benar."
+
+- name: Validasi UUID home untuk layout separate_home
+  ansible.builtin.assert:
+    that:
+      - blkid_home.stdout | trim | length > 0
+    fail_msg: "Gagal membaca UUID partisi home untuk layout separate_home."
+  when: partition_layout == 'separate_home'
+
+- name: Generate fstab
+  become: true
+  ansible.builtin.template:
+    src: fstab.j2
+    dest: /mnt/gentoo/etc/fstab
+    mode: '0644'
+
+- name: Instal firmware Linux
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace sys-kernel/linux-firmware
+
+- name: Instal microcode Intel
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace sys-firmware/intel-microcode
+  when: (cpu_vendor | default('generic')) == 'intel'
+
+- name: Instal microcode AMD
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace sys-firmware/amd-ucode
+  when: (cpu_vendor | default('generic')) == 'amd'
+
+- name: Pastikan direktori package.use tersedia
+  become: true
+  ansible.builtin.file:
+    path: /mnt/gentoo/etc/portage/package.use
+    state: directory
+    mode: '0755'
+
+- name: Hitung USE flag installkernel berdasarkan bootloader
+  ansible.builtin.set_fact:
+    installkernel_bootloader_flag: >-
+      {{ 'systemd-boot' if bootloader == 'systemd-boot'
+      else 'grub' if bootloader == 'grub'
+      else '' }}
+
+- name: Set USE flag installkernel berdasarkan bootloader
+  become: true
+  ansible.builtin.copy:
+    dest: /mnt/gentoo/etc/portage/package.use/installkernel
+    mode: '0644'
+    content: "sys-kernel/installkernel dracut{{ (' ' + installkernel_bootloader_flag) if installkernel_bootloader_flag | length > 0 else '' }}"
+
+- name: Instal installkernel dan dracut
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace sys-kernel/installkernel sys-kernel/dracut
+
+- name: Instal kernel Gentoo
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace sys-kernel/gentoo-kernel{{ '-bin' if kernel_type == 'bin' else '' }}
+
+- name: Deteksi artifact kernel terbaru
+  become: true
+  ansible.builtin.shell: |
+    ls -1t /mnt/gentoo/boot/vmlinuz* /mnt/gentoo/boot/kernel* 2>/dev/null | head -n1 | xargs -n1 basename
+  register: detected_kernel_artifact
+  changed_when: false
+
+- name: Deteksi artifact initramfs terbaru
+  become: true
+  ansible.builtin.shell: |
+    ls -1t /mnt/gentoo/boot/initramfs* /mnt/gentoo/boot/initrd* 2>/dev/null | head -n1 | xargs -n1 basename
+  register: detected_initramfs_artifact
+  changed_when: false
+
+- name: Pastikan direktori mountpoint snapshots tersedia
+  become: true
+  ansible.builtin.file:
+    path: /mnt/gentoo/.snapshots
+    state: directory
+    mode: '0755'
+
+- name: Validasi artifact kernel/initramfs ditemukan
+  ansible.builtin.assert:
+    that:
+      - detected_kernel_artifact.stdout | trim | length > 0
+      - detected_initramfs_artifact.stdout | trim | length > 0
+    fail_msg: "Artifact kernel/initramfs tidak ditemukan di /mnt/gentoo/boot setelah instalasi kernel."
+
+- name: Backup kernel lama di ESP (jika ada)
+  become: true
+  ansible.builtin.copy:
+    src: /mnt/gentoo/boot/efi/vmlinuz
+    dest: /mnt/gentoo/boot/efi/vmlinuz.old
+    remote_src: true
+    mode: '0644'
+  ignore_errors: true
+  when: bootloader in ['limine', 'systemd-boot', 'efistub']
+
+- name: Backup initramfs lama di ESP (jika ada)
+  become: true
+  ansible.builtin.copy:
+    src: /mnt/gentoo/boot/efi/initramfs.img
+    dest: /mnt/gentoo/boot/efi/initramfs-old.img
+    remote_src: true
+    mode: '0644'
+  ignore_errors: true
+  when: bootloader in ['limine', 'systemd-boot', 'efistub']
+
+- name: Sinkronkan kernel ke ESP (untuk limine/systemd-boot/EFISTUB)
+  become: true
+  ansible.builtin.copy:
+    src: "/mnt/gentoo/boot/{{ detected_kernel_artifact.stdout | trim }}"
+    dest: /mnt/gentoo/boot/efi/vmlinuz
+    remote_src: true
+    mode: '0644'
+  when: bootloader in ['limine', 'systemd-boot', 'efistub']
+
+- name: Sinkronkan initramfs ke ESP (untuk limine/systemd-boot/EFISTUB)
+  become: true
+  ansible.builtin.copy:
+    src: "/mnt/gentoo/boot/{{ detected_initramfs_artifact.stdout | trim }}"
+    dest: /mnt/gentoo/boot/efi/initramfs.img
+    remote_src: true
+    mode: '0644'
+  when: bootloader in ['limine', 'systemd-boot', 'efistub']
+
+- name: Setup Limine
+  when: bootloader == 'limine'
+  block:
+    - name: Instal Limine
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace sys-boot/limine
+
+    - name: Salin EFI binary Limine default
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo bash -c "mkdir -p /boot/efi/EFI/BOOT && cp /usr/share/limine/BOOTX64.EFI /boot/efi/EFI/BOOT/"
+      args:
+        creates: /mnt/gentoo/boot/efi/EFI/BOOT/BOOTX64.EFI
+
+    - name: Generate konfigurasi Limine
+      become: true
+      ansible.builtin.copy:
+        dest: /mnt/gentoo/boot/efi/limine.conf
+        mode: '0644'
+        content: |
+          TIMEOUT=5
+          :Gentoo Omgently
+          PROTOCOL=linux
+          KERNEL_PATH=boot():///vmlinuz
+          MODULE_PATH=boot():///initramfs.img
+          CMDLINE=root=UUID={{ blkid_root.stdout | trim }} rw {{ 'rootflags=subvol=@ ' if filesystem == 'btrfs' else '' }}{{ 'nvidia-drm.modeset=1 nvidia-drm.fbdev=1 ' if gpu_vendor == 'nvidia' else '' }}quiet splash
+          
+          :Gentoo Omgently (Fallback)
+          PROTOCOL=linux
+          KERNEL_PATH=boot():///vmlinuz.old
+          MODULE_PATH=boot():///initramfs-old.img
+          CMDLINE=root=UUID={{ blkid_root.stdout | trim }} rw {{ 'rootflags=subvol=@ ' if filesystem == 'btrfs' else '' }}{{ 'nvidia-drm.modeset=1 nvidia-drm.fbdev=1 ' if gpu_vendor == 'nvidia' else '' }}quiet splash
+
+- name: Setup GRUB
+  when: bootloader == 'grub'
+  block:
+    - name: Instal GRUB dan efibootmgr
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace sys-boot/grub sys-boot/efibootmgr
+
+    - name: Set GRUB default cmdline dengan BTRFS dan NVIDIA params
+      become: true
+      ansible.builtin.lineinfile:
+        path: /mnt/gentoo/etc/default/grub
+        regexp: '^GRUB_CMDLINE_LINUX='
+        line: >-
+          GRUB_CMDLINE_LINUX="{{ 'rootflags=subvol=@ ' if filesystem == 'btrfs' else '' }}{{ 'nvidia-drm.modeset=1 nvidia-drm.fbdev=1 ' if gpu_vendor == 'nvidia' else '' }}quiet splash"
+        state: present
+        create: true
+
+    - name: Install GRUB ke EFI
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo grub-install --target=x86_64-efi --efi-directory=/boot/efi
+
+    - name: Generate konfigurasi GRUB
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo grub-mkconfig -o /boot/grub/grub.cfg
+
+- name: Setup systemd-boot
+  when: bootloader == 'systemd-boot'
+  block:
+    - name: Cek status systemd-boot
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo bootctl --esp-path=/boot/efi is-installed
+      register: bootctl_status
+      failed_when: false
+      changed_when: false
+
+    - name: Install systemd-boot jika belum terpasang
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo bootctl install --esp-path=/boot/efi
+      when: bootctl_status.rc != 0
+
+    - name: Pastikan direktori loader entries tersedia
+      become: true
+      ansible.builtin.file:
+        path: /mnt/gentoo/boot/efi/loader/entries
+        state: directory
+        mode: '0755'
+
+    - name: Tulis konfigurasi loader systemd-boot
+      become: true
+      ansible.builtin.copy:
+        dest: /mnt/gentoo/boot/efi/loader/loader.conf
+        mode: '0644'
+        content: |
+          default omgently.conf
+          timeout 5
+          editor no
+
+    - name: Tulis entry systemd-boot Gentoo
+      become: true
+      ansible.builtin.copy:
+        dest: /mnt/gentoo/boot/efi/loader/entries/omgently.conf
+        mode: '0644'
+        content: |
+          title Gentoo Omgently
+          linux /vmlinuz
+          initrd /initramfs.img
+          options root=UUID={{ blkid_root.stdout | trim }} rw {{ 'rootflags=subvol=@ ' if filesystem == 'btrfs' else '' }}{{ 'nvidia-drm.modeset=1 nvidia-drm.fbdev=1 ' if gpu_vendor == 'nvidia' else '' }}quiet splash
+
+    - name: Tulis entry systemd-boot Gentoo (Fallback)
+      become: true
+      ansible.builtin.copy:
+        dest: /mnt/gentoo/boot/efi/loader/entries/omgently-fallback.conf
+        mode: '0644'
+        content: |
+          title Gentoo Omgently (Fallback)
+          linux /vmlinuz.old
+          initrd /initramfs-old.img
+          options root=UUID={{ blkid_root.stdout | trim }} rw {{ 'rootflags=subvol=@ ' if filesystem == 'btrfs' else '' }}{{ 'nvidia-drm.modeset=1 nvidia-drm.fbdev=1 ' if gpu_vendor == 'nvidia' else '' }}quiet splash
+
+- name: Setup EFISTUB (efibootmgr manual)
+  when: bootloader == 'efistub'
+  block:
+    - name: Instal efibootmgr untuk EFISTUB
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace sys-boot/efibootmgr
+
+    - name: Cek entri EFI existing
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo efibootmgr -v
+      register: efiboot_entries
+      changed_when: false
+
+    - name: Evaluasi kecocokan entri EFISTUB saat ini
+      ansible.builtin.set_fact:
+        efistub_entry_matches: >-
+          {{
+            ('Gentoo EFISTUB' in efiboot_entries.stdout) and
+            (('root=UUID=' ~ (blkid_root.stdout | trim)) in efiboot_entries.stdout) and
+            ('initrd=\\initramfs.img' in efiboot_entries.stdout) and
+            ((filesystem != 'btrfs') or ('rootflags=subvol=@' in efiboot_entries.stdout)) and
+            ((gpu_vendor != 'nvidia') or ('nvidia-drm.modeset=1' in efiboot_entries.stdout))
+          }}
+
+    - name: Hapus entri EFISTUB lama jika konfigurasi tidak cocok
+      become: true
+      ansible.builtin.command: >-
+        chroot /mnt/gentoo bash -c "efibootmgr | awk '/Gentoo EFISTUB/ {print substr($1,5,4)}' |
+        xargs -r -I{} efibootmgr -b {} -B"
+      when: "'Gentoo EFISTUB' in efiboot_entries.stdout and not efistub_entry_matches"
+
+    - name: Buat entri EFISTUB jika belum ada atau sudah diperbarui
+      become: true
+      ansible.builtin.command: >-
+        chroot /mnt/gentoo efibootmgr -c -d {{ target_disk }} -p 1
+        -L "Gentoo EFISTUB" -l '\\vmlinuz'
+        -u "root=UUID={{ blkid_root.stdout | trim }} rw {{ 'rootflags=subvol=@ ' if filesystem == 'btrfs' else '' }}{{ 'nvidia-drm.modeset=1 nvidia-drm.fbdev=1 ' if gpu_vendor == 'nvidia' else '' }}initrd=\\initramfs.img"
+      when: "'Gentoo EFISTUB' not in efiboot_entries.stdout or not efistub_entry_matches"

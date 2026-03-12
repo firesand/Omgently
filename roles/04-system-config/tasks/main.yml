@@ -1,0 +1,181 @@
+---
+# 1. ZONASI WAKTU & LOKALISASI (DNA Identitas)
+# ---------------------------------------------------------
+- name: Set Timezone ke file sistem
+  become: true
+  ansible.builtin.copy:
+    dest: /mnt/gentoo/etc/timezone
+    content: "{{ timezone }}"
+
+- name: Konfigurasi /etc/localtime
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --config sys-libs/timezone-data
+
+- name: Set Hardware Clock (UTC/Local) - OpenRC
+  become: true
+  ansible.builtin.lineinfile:
+    path: /mnt/gentoo/etc/conf.d/hwclock
+    regexp: '^clock='
+    line: 'clock="{{ hwclock }}"'
+  when: init_system == 'openrc'
+
+- name: Set Hardware Clock (UTC/Local) - Systemd
+  become: true
+  ansible.builtin.copy:
+    dest: /mnt/gentoo/etc/adjtime
+    content: |
+      0.0 0 0.0
+      0
+      {{ 'LOCAL' if hwclock == 'local' else 'UTC' }}
+  when: init_system == 'systemd'
+
+- name: Generate Locale (en_US.UTF-8)
+  become: true
+  ansible.builtin.copy:
+    dest: /mnt/gentoo/etc/locale.gen
+    content: |
+      {{ system_locale | default('en_US.UTF-8') }} UTF-8
+      {{ (system_locale | default('en_US.UTF-8')) | replace('UTF-8', 'utf8') }} UTF-8
+      C.UTF8 UTF-8
+
+- name: Eksekusi locale-gen dan set default locale
+  become: true
+  ansible.builtin.command: >-
+    chroot /mnt/gentoo bash -c "
+    locale-gen &&
+    eselect locale set {{ (system_locale | default('en_US.UTF-8')) | replace('UTF-8', 'utf8') }}"
+
+- name: Set Hostname Sistem
+  become: true
+  ansible.builtin.copy:
+    dest: /mnt/gentoo/etc/hostname
+    content: "{{ system_hostname }}"
+
+# 2. JARINGAN (Menyala otomatis setelah reboot)
+# ---------------------------------------------------------
+- name: Instal NetworkManager
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace net-misc/networkmanager
+
+- name: Cek status enable NetworkManager (Systemd)
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo systemctl is-enabled NetworkManager
+  register: nm_systemd_enabled
+  failed_when: false
+  changed_when: false
+  when: init_system == 'systemd'
+
+- name: Aktifkan NetworkManager (Systemd) jika belum aktif
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo systemctl enable NetworkManager
+  when: init_system == 'systemd' and nm_systemd_enabled.rc != 0
+
+- name: Cek status runlevel NetworkManager (OpenRC)
+  become: true
+  ansible.builtin.stat:
+    path: /mnt/gentoo/etc/runlevels/default/NetworkManager
+  register: nm_openrc_runlevel
+  when: init_system == 'openrc'
+
+- name: Aktifkan NetworkManager (OpenRC) jika belum aktif
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo rc-update add NetworkManager default
+  when: init_system == 'openrc' and not nm_openrc_runlevel.stat.exists
+
+# 2b. LAPTOP POWER POLICIES (Lid Close Behavior)
+# ---------------------------------------------------------
+- name: Konfigurasi lid close behavior (Systemd)
+  become: true
+  ansible.builtin.lineinfile:
+    path: /mnt/gentoo/etc/systemd/logind.conf
+    regexp: '^#?HandleLidSwitch='
+    line: 'HandleLidSwitch=suspend'
+    create: true
+  when:
+    - init_system == 'systemd'
+    - (device_type | default('desktop')) == 'laptop'
+
+- name: Konfigurasi lid close behavior (OpenRC + elogind)
+  become: true
+  ansible.builtin.lineinfile:
+    path: /mnt/gentoo/etc/elogind/logind.conf
+    regexp: '^#?HandleLidSwitch='
+    line: 'HandleLidSwitch=suspend'
+    create: true
+  when:
+    - init_system == 'openrc'
+    - (device_type | default('desktop')) == 'laptop'
+
+# 3. OTENTIKASI & PENGGUNA (Security Layer & Wayland Groups)
+# ---------------------------------------------------------
+- name: Validasi format hash password root
+  ansible.builtin.assert:
+    that:
+      - root_password_hash is match('^\$[^$]+\$[^$]+\$.+')
+    fail_msg: "root_password_hash harus berupa hash (contoh: $6$... ), bukan plaintext."
+
+- name: Set Password Root
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo usermod --password '{{ root_password_hash }}' root
+  no_log: true
+  changed_when: false
+
+- name: Cek apakah user utama sudah ada
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo getent passwd {{ username }}
+  register: user_exists
+  failed_when: false
+  changed_when: false
+
+- name: Buat User Utama dan masukkan ke grup esensial
+  # Grup 'video' dan 'input' adalah syarat mutlak agar Hyprland bisa berjalan
+  become: true
+  ansible.builtin.command: >-
+    chroot /mnt/gentoo useradd -m -G users,wheel,audio,video,input,usb{{ ',seat' if init_system == 'openrc' else '' }} -s /bin/bash {{ username }}
+  register: useradd_result
+  failed_when: useradd_result.rc != 0 and 'already exists' not in (useradd_result.stderr | lower)
+  changed_when: useradd_result.rc == 0
+  when: user_exists.rc != 0
+
+- name: Validasi format hash password user utama
+  ansible.builtin.assert:
+    that:
+      - user_password_hash is match('^\$[^$]+\$[^$]+\$.+')
+    fail_msg: "user_password_hash harus berupa hash (contoh: $6$... ), bukan plaintext."
+
+- name: Set Password untuk User Utama
+  become: true
+  ansible.builtin.command: chroot /mnt/gentoo usermod --password '{{ user_password_hash }}' {{ username }}
+  no_log: true
+  changed_when: false
+
+# 4. PRIVILEGE ESCALATION (Doas vs Sudo)
+# ---------------------------------------------------------
+- name: Setup DOAS (Minimalis & Cepat)
+  block:
+    - name: Instal app-admin/doas
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace app-admin/doas
+
+    - name: Konfigurasi doas.conf (Izinkan grup wheel)
+      become: true
+      ansible.builtin.copy:
+        dest: /mnt/gentoo/etc/doas.conf
+        content: "permit persist :wheel\n"
+        mode: '0600'
+  when: setup_doas_instead_of_sudo | bool
+
+- name: Setup SUDO (Klasik)
+  block:
+    - name: Instal app-admin/sudo
+      become: true
+      ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace app-admin/sudo
+
+    - name: Izinkan grup wheel di sudoers
+      become: true
+      ansible.builtin.lineinfile:
+        path: /mnt/gentoo/etc/sudoers
+        regexp: '^# %wheel ALL=\(ALL:ALL\) ALL'
+        line: '%wheel ALL=(ALL:ALL) ALL'
+        validate: 'visudo -cf %s'
+  when: not (setup_doas_instead_of_sudo | bool)

@@ -1,0 +1,28 @@
+# Ansible
+*.retry
+.ansible/
+*.pyc
+__pycache__/
+
+# Editor
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp / secrets
+/tmp/
+*.tmp
+*.bak
+
+# Binary archives yang di-generate (jangan commit ke repo)
+dotfiles/*.tar.gz
+dotfiles/*.tar.xz
+dotfiles/*.zip
+
+# Jangan pernah commit file vars yang berisi password hash nyata
+# Template di examples/vars/ aman karena hanya berisi placeholder

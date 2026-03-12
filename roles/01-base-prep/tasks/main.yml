@@ -1,0 +1,369 @@
+---
+# ==============================================================================
+# OMGENTLY: ROLE 01 - BASE PREP & PARTITIONING
+# ==============================================================================
+
+- name: Validasi target disk sebagai block device
+  become: true
+  ansible.builtin.stat:
+    path: "{{ target_disk }}"
+  register: disk_check
+  failed_when: not disk_check.stat.exists or not disk_check.stat.isblk
+
+- name: Identifikasi sufiks disk (NVMe/MMC)
+  ansible.builtin.set_fact:
+    p_suffix: "{{ 'p' if target_disk is match('.*(nvme|mmcblk).*') else '' }}"
+
+- name: Set path partisi target dan ukuran swap dinamis
+  ansible.builtin.set_fact:
+    part_efi: "{{ target_disk }}{{ p_suffix }}1"
+    part_swap: "{{ target_disk }}{{ p_suffix }}2"
+    part_root: "{{ target_disk }}{{ p_suffix }}3"
+    part_home: "{{ target_disk }}{{ p_suffix }}4"
+    # Mengambil swap_size_gb dari variabel bootstrapper, fallback ke 8GB jika kosong
+    swap_size: "{{ swap_size_gb | default('8') }}"
+
+- name: Validasi ukuran swap minimum 1GB
+  ansible.builtin.assert:
+    that:
+      - (swap_size | int) >= 1
+    fail_msg: "swap_size_gb harus >= 1."
+
+- name: Debug parameter disk dan layout (verbosity 1)
+  ansible.builtin.debug:
+    msg:
+      target_disk: "{{ target_disk }}"
+      partition_layout: "{{ partition_layout }}"
+      filesystem: "{{ filesystem }}"
+      swap_size_gb: "{{ swap_size }}"
+      root_size_gb: "{{ root_size_gb | default('0') }}"
+    verbosity: 1
+
+- name: Ambil ukuran disk target dalam bytes
+  become: true
+  ansible.builtin.command: lsblk -b -n -d -o SIZE {{ target_disk }}
+  register: disk_size_bytes
+  changed_when: false
+
+- name: Validasi kapasitas disk untuk layout separate_home
+  ansible.builtin.assert:
+    that:
+      - (disk_size_bytes.stdout | int) >= ((root_size_gb | int + swap_size | int + 2) * 1024 * 1024 * 1024)
+    fail_msg: >-
+      Kapasitas disk tidak cukup untuk konfigurasi yang dipilih
+      (root={{ root_size_gb }}GB, swap={{ swap_size }}GB, EFI+cadangan=2GB).
+  when: partition_layout == 'separate_home'
+
+- name: Cek apakah partisi root sudah ada (Idempotensi)
+  become: true
+  ansible.builtin.stat:
+    path: "{{ part_root }}"
+  register: root_part_check
+
+- name: Cek apakah partisi EFI sudah ada
+  become: true
+  ansible.builtin.stat:
+    path: "{{ part_efi }}"
+  register: efi_part_check
+
+- name: Cek apakah partisi swap sudah ada
+  become: true
+  ansible.builtin.stat:
+    path: "{{ part_swap }}"
+  register: swap_part_check
+
+- name: Cek apakah partisi home sudah ada (separate_home)
+  become: true
+  ansible.builtin.stat:
+    path: "{{ part_home }}"
+  register: home_part_check
+  when: partition_layout == 'separate_home'
+
+- name: Cek tipe filesystem root saat ini
+  become: true
+  ansible.builtin.command: blkid -s TYPE -o value {{ part_root }}
+  register: root_fs_type
+  failed_when: false
+  changed_when: false
+  when: root_part_check.stat.exists
+
+- name: Cek tipe filesystem EFI saat ini
+  become: true
+  ansible.builtin.command: blkid -s TYPE -o value {{ part_efi }}
+  register: efi_fs_type
+  failed_when: false
+  changed_when: false
+  when: efi_part_check.stat.exists
+
+- name: Cek tipe filesystem swap saat ini
+  become: true
+  ansible.builtin.command: blkid -s TYPE -o value {{ part_swap }}
+  register: swap_fs_type
+  failed_when: false
+  changed_when: false
+  when: swap_part_check.stat.exists
+
+- name: Cek tipe filesystem home saat ini (separate_home)
+  become: true
+  ansible.builtin.command: blkid -s TYPE -o value {{ part_home }}
+  register: home_fs_type
+  failed_when: false
+  changed_when: false
+  when: partition_layout == 'separate_home' and (home_part_check.stat.exists | default(false))
+
+- name: Normalisasi status home partition untuk evaluasi Jinja aman
+  ansible.builtin.set_fact:
+    home_part_exists: "{{ (home_part_check.stat.exists | default(false)) if partition_layout == 'separate_home' else false }}"
+    home_fs_current: "{{ (home_fs_type.stdout | default('')) if partition_layout == 'separate_home' else '' }}"
+
+- name: Set status repartition secara komprehensif
+  ansible.builtin.set_fact:
+    repartition_required: >-
+      {{
+        (not efi_part_check.stat.exists) or
+        (not swap_part_check.stat.exists) or
+        (not root_part_check.stat.exists) or
+        (partition_layout == 'separate_home' and not home_part_exists) or
+        (root_part_check.stat.exists and (root_fs_type.stdout | default('')) != filesystem) or
+        (efi_part_check.stat.exists and (efi_fs_type.stdout | default('')) != 'vfat') or
+        (swap_part_check.stat.exists and (swap_fs_type.stdout | default('')) != 'swap') or
+        (
+          partition_layout == 'separate_home' and
+          home_part_exists and
+          home_fs_current != filesystem
+        )
+      }}
+
+# ------------------------------------------------------------------------------
+# BLOK 1: PARTISI DAN FORMAT (Destruktif)
+# ------------------------------------------------------------------------------
+- name: Blok Partisi dan Format Disk
+  become: true
+  when: repartition_required
+  block:
+    - name: Zap seluruh partisi di disk target
+      ansible.builtin.command: sgdisk --zap-all {{ target_disk }}
+
+    - name: Buat Partisi (Layout Flat - EFI 512M)
+      ansible.builtin.command: >
+        sgdisk -n 1:0:+512M -t 1:ef00
+        -n 2:0:+{{ swap_size }}G -t 2:8200
+        -n 3:0:0 -t 3:8300
+        {{ target_disk }}
+      when: partition_layout == 'flat'
+
+    - name: Buat Partisi (Layout Separate Home - EFI 512M)
+      ansible.builtin.command: >
+        sgdisk -n 1:0:+512M -t 1:ef00
+        -n 2:0:+{{ swap_size }}G -t 2:8200
+        -n 3:0:+{{ root_size_gb }}G -t 3:8300
+        -n 4:0:0 -t 4:8300
+        {{ target_disk }}
+      when: partition_layout == 'separate_home'
+
+    - name: Inform kernel tabel partisi baru (jika partprobe tersedia)
+      ansible.builtin.shell: |
+        if command -v partprobe >/dev/null 2>&1; then
+          partprobe {{ target_disk }}
+        fi
+      changed_when: false
+
+    - name: Tunggu device node siap (jika udevadm tersedia)
+      ansible.builtin.shell: |
+        if command -v udevadm >/dev/null 2>&1; then
+          udevadm settle --timeout=10
+        fi
+      changed_when: false
+
+    - name: Format EFI Partition (FAT32)
+      ansible.builtin.command: mkfs.vfat -F 32 -n EFI {{ part_efi }}
+
+    - name: Format Swap Partition
+      ansible.builtin.command: mkswap -L SWAP {{ part_swap }}
+
+    - name: Format ROOT Partition (BTRFS)
+      ansible.builtin.command: mkfs.btrfs -f -L GENTOO_ROOT {{ part_root }}
+      when: filesystem == 'btrfs'
+
+    - name: Format HOME Partition (BTRFS, separate_home)
+      ansible.builtin.command: mkfs.btrfs -f -L GENTOO_HOME {{ part_home }}
+      when: filesystem == 'btrfs' and partition_layout == 'separate_home'
+
+    - name: Format ROOT & HOME Partition (EXT4)
+      # PERBAIKAN KRITIS: EXT4 menggunakan -F (Force), bukan -f
+      vars:
+        devices_to_format: "{{ [part_root] + ([part_home] if partition_layout == 'separate_home' else []) }}"
+      ansible.builtin.command: "mkfs.ext4 -F {{ item }}"
+      loop: "{{ devices_to_format }}"
+      when: filesystem == 'ext4'
+
+    - name: Format ROOT & HOME Partition (XFS)
+      vars:
+        devices_to_format: "{{ [part_root] + ([part_home] if partition_layout == 'separate_home' else []) }}"
+      ansible.builtin.command: "mkfs.xfs -f {{ item }}"
+      loop: "{{ devices_to_format }}"
+      when: filesystem == 'xfs'
+
+  rescue:
+    - name: CLEANUP - Muat ulang informasi partisi di kernel jika memungkinkan
+      ansible.builtin.shell: |
+        if command -v partprobe >/dev/null 2>&1; then
+          partprobe {{ target_disk }}
+        fi
+      changed_when: false
+      ignore_errors: true
+
+    - name: FAILED - Hentikan eksekusi jika partisi/format gagal
+      ansible.builtin.fail:
+        msg: "Kesalahan fatal saat mempartisi atau memformat disk. Proses dihentikan untuk mencegah kerusakan."
+
+# ------------------------------------------------------------------------------
+# BLOK 2: MOUNTING & BTRFS SUBVOLUMES
+# ------------------------------------------------------------------------------
+- name: Blok Mounting dan Subvolume
+  become: true
+  block:
+    - name: Setup BTRFS Subvolumes (Root)
+      when: filesystem == 'btrfs'
+      block:
+        - name: Pastikan /mnt/gentoo tidak mounted sebelum setup subvolume
+          ansible.builtin.mount:
+            path: /mnt/gentoo
+            state: unmounted
+          ignore_errors: true
+
+        - name: Mount root partition sementara untuk subvolumes
+          ansible.builtin.mount:
+            path: /mnt/gentoo
+            src: "{{ part_root }}"
+            fstype: btrfs
+            state: mounted
+
+        - name: Buat BTRFS subvolumes esensial di Root (Berlaku untuk semua layout)
+          ansible.builtin.command: "btrfs subvolume create /mnt/gentoo/{{ item }}"
+          loop:
+            - "@"
+            - "@snapshots"
+            - "@portage"
+            - "@distfiles"
+          register: subvol_create
+          # PERBAIKAN KRITIS: Rerun tidak boleh gagal saat subvolume sudah ada.
+          # btrfs dapat menulis pesan "exists" di stdout atau stderr tergantung versi.
+          failed_when:
+            - subvol_create.rc != 0
+            - "'exists' not in ((subvol_create.stdout | default('') ~ ' ' ~ subvol_create.stderr | default('')) | lower)"
+          # Tandai changed hanya ketika benar-benar create subvolume baru.
+          changed_when: >-
+            'Create subvolume' in (subvol_create.stdout | default('')) or
+            'Created subvolume' in (subvol_create.stdout | default(''))
+
+        - name: Buat BTRFS subvolume @home di Root (Khusus Flat Layout)
+          ansible.builtin.command: btrfs subvolume create /mnt/gentoo/@home
+          when: partition_layout == 'flat'
+          register: home_subvol_create
+          # Pola sama seperti di atas: toleran rerun jika @home sudah ada.
+          failed_when:
+            - home_subvol_create.rc != 0
+            - "'exists' not in ((home_subvol_create.stdout | default('') ~ ' ' ~ home_subvol_create.stderr | default('')) | lower)"
+          changed_when: >-
+            'Create subvolume' in (home_subvol_create.stdout | default('')) or
+            'Created subvolume' in (home_subvol_create.stdout | default(''))
+
+        - name: Unmount root partition sementara (Gunakan state unmounted)
+          ansible.builtin.mount:
+            path: /mnt/gentoo
+            state: unmounted
+
+    - name: Mount Target Root Partition (BTRFS)
+      ansible.builtin.mount:
+        path: /mnt/gentoo
+        src: "{{ part_root }}"
+        fstype: btrfs
+        opts: "subvol=@,compress=zstd:1,noatime"
+        state: mounted
+      when: filesystem == 'btrfs'
+
+    - name: Mount Target Root Partition (EXT4/XFS)
+      ansible.builtin.mount:
+        path: /mnt/gentoo
+        src: "{{ part_root }}"
+        fstype: "{{ filesystem }}"
+        state: mounted
+      when: filesystem in ['ext4', 'xfs']
+
+    - name: Buat direktori esensial untuk mounting point
+      ansible.builtin.file:
+        path: "/mnt/gentoo/{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - boot/efi
+        - home
+        - var/db/repos/gentoo
+        - var/cache/distfiles
+
+    - name: Mount Subvolumes Tambahan (BTRFS)
+      ansible.builtin.mount:
+        path: "/mnt/gentoo/{{ item.path }}"
+        src: "{{ part_root }}"
+        fstype: btrfs
+        opts: "subvol={{ item.subvol }},compress=zstd:1,noatime"
+        state: mounted
+      loop:
+        - { path: 'var/db/repos/gentoo', subvol: '@portage' }
+        - { path: 'var/cache/distfiles', subvol: '@distfiles' }
+      when: filesystem == 'btrfs'
+
+    - name: Mount Home (BTRFS flat layout)
+      ansible.builtin.mount:
+        path: /mnt/gentoo/home
+        src: "{{ part_root }}"
+        fstype: btrfs
+        opts: "subvol=@home,compress=zstd:1,noatime"
+        state: mounted
+      when: filesystem == 'btrfs' and partition_layout == 'flat'
+
+    - name: Mount Home (BTRFS separate_home)
+      ansible.builtin.mount:
+        path: /mnt/gentoo/home
+        src: "{{ part_home }}"
+        fstype: btrfs
+        opts: "compress=zstd:1,noatime"
+        state: mounted
+      when: filesystem == 'btrfs' and partition_layout == 'separate_home'
+
+    - name: Mount Home (EXT4/XFS)
+      ansible.builtin.mount:
+        path: /mnt/gentoo/home
+        src: "{{ part_home }}"
+        fstype: "{{ filesystem }}"
+        state: mounted
+      when: filesystem in ['ext4', 'xfs'] and partition_layout == 'separate_home'
+
+    - name: Mount EFI Partition
+      ansible.builtin.mount:
+        path: /mnt/gentoo/boot/efi
+        src: "{{ part_efi }}"
+        fstype: vfat
+        state: mounted
+
+    - name: Cek status swap partition
+      ansible.builtin.shell: |
+        set -o pipefail
+        swapon --show=NAME --noheadings | grep -Fx "{{ part_swap }}"
+      register: swap_check
+      failed_when: false
+      changed_when: false
+
+    - name: Aktifkan Swap Partition jika belum aktif
+      ansible.builtin.command: swapon {{ part_swap }}
+      when: swap_check.rc != 0
+
+  rescue:
+    - name: CLEANUP - Unmount semua partisi jika terjadi kegagalan mounting
+      ansible.builtin.command: umount -R /mnt/gentoo
+      ignore_errors: true
+
+    - name: FAILED - Beritahu user
+      ansible.builtin.fail:
+        msg: "Gagal me-mount partisi. Direktori /mnt/gentoo telah di-unmount kembali untuk keamanan."

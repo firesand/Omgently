@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Firefox
+Comment=Firefox Browser (Wayland)
+Exec=env MOZ_ENABLE_WAYLAND=1 firefox %U
+Terminal=false
+Type=Application
+Icon=firefox
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
+StartupNotify=true

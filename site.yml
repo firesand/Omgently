@@ -1,0 +1,13 @@
+---
+- name: Gentoo-Omarchy Installation Playbook
+  hosts: localhost
+  connection: local
+  become: yes
+  roles:
+    - 01-base-prep
+    - 02-core-system
+    - 03-kernel-boot
+    - 04-system-config
+    - 05-wayland-gpu
+    - 06-hyprland-de
+    - 07-dotfiles-tools
