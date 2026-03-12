@@ -159,7 +159,7 @@ if [ "$PASSWORD" != "$PASSWORD_CONFIRM" ]; then
     exit 1
 fi
 unset PASSWORD_CONFIRM
-DOTFILES_URL=$(ask_input_validated "Dotfiles Repo" "URL repositori dotfiles Anda:" "https://github.com/edo/gentoo-omarchy-dotfiles.git" '^https?://[A-Za-z0-9._~:/?#\[\]@!$&()*+,;=%-]+$' "URL dotfiles tidak valid.")
+DOTFILES_URL=$(ask_input_validated "Dotfiles Repo" "URL repositori dotfiles Anda:" "https://github.com/firesand/Omgently.git" '^https?://[A-Za-z0-9._~:/?#\[\]@!$&()*+,;=%-]+$' "URL dotfiles tidak valid.")
 GENTOO_MIRROR=$(ask_input_validated "Gentoo Mirror" "Base URL mirror Gentoo:" "https://distfiles.gentoo.org" '^https?://[A-Za-z0-9._~:/?#\[\]@!$&()*+,;=%-]+$' "URL mirror tidak valid.")
 if ! command -v curl &> /dev/null; then
     echo "❌ curl tidak ditemukan. Install curl terlebih dahulu."

@@ -38,5 +38,5 @@ default_terminal: "ghostty"
 default_browser: "brave"
 
 install_omarchy_dotfiles: true
-dotfiles_repo_url: "https://github.com/edo/gentoo-omarchy-dotfiles.git"
+dotfiles_repo_url: "https://github.com/firesand/Omgently.git"
 gentoo_mirror: "https://distfiles.gentoo.org"

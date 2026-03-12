@@ -53,17 +53,27 @@
       become: true
       ansible.builtin.command: >-
         chroot /mnt/gentoo su - {{ username }} -c "
-        git clone {{ dotfiles_repo_url | default('https://github.com/edo/gentoo-omarchy-dotfiles.git') }} ~/.dotfiles
+        git clone {{ dotfiles_repo_url | default('https://github.com/firesand/Omgently.git') }} ~/.dotfiles
         "
       args:
         creates: /mnt/gentoo/home/{{ username }}/.dotfiles/.git
+
+    - name: Deteksi root paket stow di repo dotfiles
+      become: true
+      ansible.builtin.stat:
+        path: /mnt/gentoo/home/{{ username }}/.dotfiles/dotfiles
+      register: dotfiles_nested_dir
+
+    - name: Tentukan path root stow
+      ansible.builtin.set_fact:
+        dotfiles_stow_root: "{{ '/home/' ~ username ~ '/.dotfiles/dotfiles' if (dotfiles_nested_dir.stat.isdir | default(false)) else '/home/' ~ username ~ '/.dotfiles' }}"
 
     - name: Verifikasi folder Stow tersedia
       become: true
       ansible.builtin.shell: |
         errors=""
         for dir in hyprland waybar wofi mako hyprpaper hyprlock hypridle nvim bash omgently-bin desktop-entries gtk {{ default_terminal }}; do
-          [ -d /mnt/gentoo/home/{{ username }}/.dotfiles/$dir ] || errors="${errors}Folder stow '${dir}' tidak ada di repo dotfiles\n"
+          [ -d /mnt/gentoo{{ dotfiles_stow_root }}/$dir ] || errors="${errors}Folder stow '${dir}' tidak ada di repo dotfiles\n"
         done
         if [ -n "$errors" ]; then
           printf "%b" "$errors"
@@ -77,7 +87,7 @@
       become: true
       ansible.builtin.command: >-
         chroot /mnt/gentoo su - {{ username }} -c "
-        cd ~/.dotfiles && stow --restow hyprland waybar wofi mako hyprpaper hyprlock hypridle nvim bash omgently-bin desktop-entries gtk {{ default_terminal }}
+        cd {{ dotfiles_stow_root }} && stow --restow hyprland waybar wofi mako hyprpaper hyprlock hypridle nvim bash omgently-bin desktop-entries gtk {{ default_terminal }}
         "
 
     - name: Cek keberadaan hyprland.conf hasil stow

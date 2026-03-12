@@ -75,7 +75,7 @@ Proyek ini dibangun secara modular agar sangat mudah dibaca dan dimodifikasi:
 1. **Boot** ke LiveCD pilihan Anda.
 2. Unduh dan jalankan TUI Bootstrapper:
    ```bash
-   bash <(curl -fsSL https://raw.githubusercontent.com/<username>/<repo>/main/bootstrapper.sh)
+   bash <(curl -fsSL https://raw.githubusercontent.com/firesand/Omgently/main/bootstrapper.sh)
    ```
 3. Ikuti wizard TUI (termasuk pilihan `locale`, ukuran `swap`, `dotfiles_repo_url`, `gentoo_mirror`, profile `keywords`, dan mode lisensi) sampai file variabel sementara terbentuk.
 4. Bootstrapper akan mengeksekusi:
@@ -124,7 +124,7 @@ setup_doas_instead_of_sudo: true
 default_terminal: "ghostty"
 default_browser: "brave"
 install_omarchy_dotfiles: true
-dotfiles_repo_url: "https://github.com/edo/gentoo-omarchy-dotfiles.git"
+dotfiles_repo_url: "https://github.com/firesand/Omgently.git"
 gentoo_mirror: "https://distfiles.gentoo.org"
 ```
 
