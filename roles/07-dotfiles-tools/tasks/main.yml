@@ -51,12 +51,16 @@
 
     - name: Clone repositori Dotfiles (Eksekusi sebagai User Utama)
       become: true
-      ansible.builtin.command: >-
-        chroot /mnt/gentoo su - {{ username }} -c "
-        git clone {{ dotfiles_repo_url | default('https://github.com/firesand/Omgently.git') }} ~/.dotfiles
-        "
-      args:
-        creates: /mnt/gentoo/home/{{ username }}/.dotfiles/.git
+      ansible.builtin.shell: |
+        if [ -d /mnt/gentoo/home/{{ username }}/.dotfiles/.git ]; then
+          chroot /mnt/gentoo su - {{ username }} -c "cd ~/.dotfiles && git pull"
+          echo "pulled"
+        else
+          chroot /mnt/gentoo su - {{ username }} -c "git clone {{ dotfiles_repo_url | default('https://github.com/firesand/Omgently.git') }} ~/.dotfiles"
+          echo "cloned"
+        fi
+      register: dotfiles_clone_result
+      changed_when: "'cloned' in dotfiles_clone_result.stdout"
 
     - name: Deteksi root paket stow di repo dotfiles
       become: true
