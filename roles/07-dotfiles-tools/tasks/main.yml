@@ -161,11 +161,28 @@
         chroot /mnt/gentoo chown {{ username }}:{{ username }} /home/{{ username }}/.bash_profile
       changed_when: false
 
+    - name: Resolve symlink config files ke path asli (Stow creates symlinks)
+      become: true
+      ansible.builtin.shell: |
+        for f in autostart.conf hyprland.conf bindings.conf; do
+          real=$(readlink -f /mnt/gentoo/home/{{ username }}/.config/hypr/$f 2>/dev/null || echo "")
+          echo "$f=$real"
+        done
+      register: resolved_paths
+      changed_when: false
+      when: hypr_conf_after_stow.stat.exists
+
+    - name: Set resolved path variables
+      ansible.builtin.set_fact:
+        real_autostart: "{{ (resolved_paths.stdout_lines | select('match', '^autostart.conf=') | first | default('autostart.conf=')).split('=', 1)[1] }}"
+        real_hyprland: "{{ (resolved_paths.stdout_lines | select('match', '^hyprland.conf=') | first | default('hyprland.conf=')).split('=', 1)[1] }}"
+        real_bindings: "{{ (resolved_paths.stdout_lines | select('match', '^bindings.conf=') | first | default('bindings.conf=')).split('=', 1)[1] }}"
+      when: hypr_conf_after_stow.stat.exists
+
     - name: Pastikan autostart polkit agent robust
       become: true
       ansible.builtin.lineinfile:
-        path: /mnt/gentoo/home/{{ username }}/.config/hypr/autostart.conf
-        follow: true
+        path: "{{ real_autostart }}"
         regexp: '^\s*exec-once\s*=\s*.*lxqt-policykit-agent.*$'
         line: "exec-once = sh -c 'if [ -x /usr/libexec/lxqt-policykit-agent ]; then exec /usr/libexec/lxqt-policykit-agent; elif [ -x /usr/lib/lxqt-policykit-agent ]; then exec /usr/lib/lxqt-policykit-agent; fi' &"
         state: present
@@ -174,8 +191,7 @@
     - name: Pastikan autostart Pipewire
       become: true
       ansible.builtin.lineinfile:
-        path: /mnt/gentoo/home/{{ username }}/.config/hypr/autostart.conf
-        follow: true
+        path: "{{ real_autostart }}"
         regexp: '^\s*exec-once\s*=\s*.*\bpipewire\b.*$'
         line: 'exec-once = pipewire &'
         state: present
@@ -184,8 +200,7 @@
     - name: Pastikan autostart Wireplumber
       become: true
       ansible.builtin.lineinfile:
-        path: /mnt/gentoo/home/{{ username }}/.config/hypr/autostart.conf
-        follow: true
+        path: "{{ real_autostart }}"
         regexp: '^\s*exec-once\s*=\s*.*\bwireplumber\b.*$'
         line: 'exec-once = wireplumber &'
         state: present
@@ -194,8 +209,7 @@
     - name: Set terminal keybinding sesuai pilihan user
       become: true
       ansible.builtin.lineinfile:
-        path: /mnt/gentoo/home/{{ username }}/.config/hypr/bindings.conf
-        follow: true
+        path: "{{ real_bindings }}"
         regexp: '^\s*bind\s*=\s*\$mainMod,\s*Return,\s*exec,'
         line: 'bind = $mainMod, Return, exec, {{ default_terminal }}'
         state: present
@@ -204,8 +218,7 @@
     - name: Pastikan autostart Hyprpaper
       become: true
       ansible.builtin.lineinfile:
-        path: /mnt/gentoo/home/{{ username }}/.config/hypr/autostart.conf
-        follow: true
+        path: "{{ real_autostart }}"
         regexp: '^\s*exec-once\s*=\s*.*\bhyprpaper\b.*$'
         line: 'exec-once = hyprpaper &'
         state: present
@@ -214,8 +227,7 @@
     - name: Pastikan autostart Hypridle
       become: true
       ansible.builtin.lineinfile:
-        path: /mnt/gentoo/home/{{ username }}/.config/hypr/autostart.conf
-        follow: true
+        path: "{{ real_autostart }}"
         regexp: '^\s*exec-once\s*=\s*.*\bhypridle\b.*$'
         line: 'exec-once = hypridle &'
         state: present
@@ -224,8 +236,7 @@
     - name: Pastikan autostart cliphist daemon
       become: true
       ansible.builtin.lineinfile:
-        path: /mnt/gentoo/home/{{ username }}/.config/hypr/autostart.conf
-        follow: true
+        path: "{{ real_autostart }}"
         regexp: '^\s*exec-once\s*=\s*.*cliphist\s+store.*$'
         line: 'exec-once = wl-paste --type text --watch cliphist store &'
         state: present
@@ -234,8 +245,7 @@
     - name: Pastikan autostart SwayOSD server
       become: true
       ansible.builtin.lineinfile:
-        path: /mnt/gentoo/home/{{ username }}/.config/hypr/autostart.conf
-        follow: true
+        path: "{{ real_autostart }}"
         regexp: '^\s*exec-once\s*=\s*.*\bswayosd-server\b.*$'
         line: 'exec-once = swayosd-server &'
         state: present
@@ -244,8 +254,7 @@
     - name: Hapus env NVIDIA global di hyprland.conf
       become: true
       ansible.builtin.lineinfile:
-        path: /mnt/gentoo/home/{{ username }}/.config/hypr/hyprland.conf
-        follow: true
+        path: "{{ real_hyprland }}"
         regexp: '^env\s*=\s*(LIBVA_DRIVER_NAME,|GBM_BACKEND,|__GLX_VENDOR_LIBRARY_NAME,|WLR_NO_HARDWARE_CURSORS,|AQ_NO_HARDWARE_CURSORS,)'
         state: absent
       when: hypr_conf_after_stow.stat.exists
@@ -253,8 +262,7 @@
     - name: Tambah env NVIDIA khusus vendor di hyprland.conf
       become: true
       ansible.builtin.blockinfile:
-        path: /mnt/gentoo/home/{{ username }}/.config/hypr/hyprland.conf
-        follow: true
+        path: "{{ real_hyprland }}"
         marker: '# {mark} Omgently NVIDIA Env'
         insertafter: '^env = CLUTTER_BACKEND'
         block: |
@@ -270,8 +278,7 @@
     - name: Hapus block env NVIDIA untuk non-NVIDIA
       become: true
       ansible.builtin.blockinfile:
-        path: /mnt/gentoo/home/{{ username }}/.config/hypr/hyprland.conf
-        follow: true
+        path: "{{ real_hyprland }}"
         marker: '# {mark} Omgently NVIDIA Env'
         state: absent
       when:
