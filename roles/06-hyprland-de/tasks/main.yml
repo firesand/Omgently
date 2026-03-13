@@ -82,7 +82,7 @@
       # Desktop (main repo, testing)
       app-misc/nwg-look ~amd64
       gui-apps/swayosd ~amd64
-      media-fonts/nerdfonts **
+      media-fonts/nerdfonts ~amd64
       www-client/brave-bin ~amd64
 
       # GURU overlay (testing)
