@@ -167,8 +167,10 @@ CPU_VENDOR=$(ask_radio "CPU Vendor" "Pilih CPU vendor (terdeteksi: $CPU_VENDOR_D
     "amd" "AMD" "$CPU_VENDOR_AMD" \
     "generic" "Generic" "$CPU_VENDOR_GENERIC")
 
-DISKS=$(lsblk -d -n -p -o NAME,SIZE,MODEL,TYPE | awk '$4=="disk" {desc=$2; for(i=3; i<NF; i++) desc=desc "_" $i; print $1 " " desc}')
-DISK_MENU=(); while read -r dev desc; do DISK_MENU+=("$dev" "$(echo "$desc" | tr '_' ' ')"); done <<< "$DISKS"
+DISKS=$(lsblk -d -n -p -P -o NAME,SIZE,MODEL,TYPE | awk -F'"' '/TYPE="disk"/ {name=$2; size=$4; model=$6; print name " " size " " model}')
+DISK_MENU=(); while read -r dev size model; do
+    DISK_MENU+=("$dev" "${size} ${model}")
+done <<< "$DISKS"
 TARGET_DISK=$(ask_menu "Partisi Disk" "Pilih drive instalasi (AKAN DIHAPUS):" "${DISK_MENU[@]}")
 if [ -z "$TARGET_DISK" ]; then exit 1; fi
 
