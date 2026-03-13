@@ -55,11 +55,6 @@
   ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace sys-firmware/intel-microcode
   when: (cpu_vendor | default('generic')) == 'intel'
 
-- name: Instal microcode AMD
-  become: true
-  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace sys-firmware/amd-ucode
-  when: (cpu_vendor | default('generic')) == 'amd'
-
 - name: Pastikan direktori package.use tersedia
   become: true
   ansible.builtin.file:
@@ -174,18 +169,27 @@
         dest: /mnt/gentoo/boot/efi/limine.conf
         mode: '0644'
         content: |
-          TIMEOUT=5
-          :Gentoo Omgently
-          PROTOCOL=linux
-          KERNEL_PATH=boot():///vmlinuz
-          MODULE_PATH=boot():///initramfs.img
-          CMDLINE=root=UUID={{ blkid_root.stdout | trim }} rw {{ 'rootflags=subvol=@ ' if filesystem == 'btrfs' else '' }}{{ 'nvidia-drm.modeset=1 nvidia-drm.fbdev=1 ' if gpu_vendor == 'nvidia' else '' }}quiet splash
-          
-          :Gentoo Omgently (Fallback)
-          PROTOCOL=linux
-          KERNEL_PATH=boot():///vmlinuz.old
-          MODULE_PATH=boot():///initramfs-old.img
-          CMDLINE=root=UUID={{ blkid_root.stdout | trim }} rw {{ 'rootflags=subvol=@ ' if filesystem == 'btrfs' else '' }}{{ 'nvidia-drm.modeset=1 nvidia-drm.fbdev=1 ' if gpu_vendor == 'nvidia' else '' }}quiet splash
+          timeout: 5
+
+          /Gentoo Omgently
+          protocol: linux
+          path: boot():/vmlinuz
+          module_path: boot():/initramfs.img
+          cmdline: root=UUID={{ blkid_root.stdout | trim }} rw {{ 'rootflags=subvol=@ ' if filesystem == 'btrfs' else '' }}{{ 'nvidia-drm.modeset=1 nvidia-drm.fbdev=1 ' if gpu_vendor == 'nvidia' else '' }}quiet splash
+
+          /Gentoo Omgently (Fallback)
+          protocol: linux
+          path: boot():/vmlinuz.old
+          module_path: boot():/initramfs-old.img
+          cmdline: root=UUID={{ blkid_root.stdout | trim }} rw {{ 'rootflags=subvol=@ ' if filesystem == 'btrfs' else '' }}{{ 'nvidia-drm.modeset=1 nvidia-drm.fbdev=1 ' if gpu_vendor == 'nvidia' else '' }}quiet splash
+
+    - name: Salin limine.conf ke direktori EFI/BOOT
+      become: true
+      ansible.builtin.copy:
+        src: /mnt/gentoo/boot/efi/limine.conf
+        dest: /mnt/gentoo/boot/efi/EFI/BOOT/limine.conf
+        remote_src: true
+        mode: '0644'
 
 - name: Setup GRUB
   when: bootloader == 'grub'

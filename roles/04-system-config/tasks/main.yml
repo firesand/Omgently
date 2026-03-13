@@ -35,7 +35,6 @@
     dest: /mnt/gentoo/etc/locale.gen
     content: |
       {{ system_locale | default('en_US.UTF-8') }} UTF-8
-      {{ (system_locale | default('en_US.UTF-8')) | replace('UTF-8', 'utf8') }} UTF-8
       C.UTF8 UTF-8
 
 - name: Eksekusi locale-gen dan set default locale
@@ -43,7 +42,7 @@
   ansible.builtin.command: >-
     chroot /mnt/gentoo bash -c "
     locale-gen &&
-    eselect locale set {{ (system_locale | default('en_US.UTF-8')) | replace('UTF-8', 'utf8') }}"
+    eselect locale set {{ system_locale | default('en_US.UTF-8') }}"
 
 - name: Set Hostname Sistem
   become: true

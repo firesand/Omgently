@@ -3,6 +3,18 @@
 # OMGENTLY: ROLE 01 - BASE PREP & PARTITIONING
 # ==============================================================================
 
+- name: Pre-cleanup mount lama pada /mnt/gentoo (aman untuk rerun)
+  become: true
+  ansible.builtin.shell: |
+    if [ -d /mnt/gentoo ] && findmnt -R /mnt/gentoo >/dev/null 2>&1; then
+      findmnt -R -n -o TARGET /mnt/gentoo | sort -r | while read -r m; do
+        umount -l "$m" || true
+      done
+    fi
+  args:
+    executable: /bin/bash
+  changed_when: false
+
 - name: Validasi target disk sebagai block device
   become: true
   ansible.builtin.stat:

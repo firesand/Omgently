@@ -126,7 +126,7 @@
     state: directory
     mode: '0755'
 
-- name: Setup repos.conf (Git Sync)
+- name: Setup repos.conf (mode webrsync untuk bootstrap aman)
   ansible.builtin.copy:
     dest: /mnt/gentoo/etc/portage/repos.conf/gentoo.conf
     mode: '0644'
@@ -135,10 +135,8 @@
       main-repo = gentoo
       [gentoo]
       location = /var/db/repos/gentoo
-      sync-type = git
-      sync-uri = {{ portage_sync_uri | default('https://github.com/gentoo-mirror/gentoo.git') }}
+      sync-type = webrsync
       auto-sync = yes
-      sync-depth = 1
 
 - name: Cek apakah Portage Tree Git sudah ada
   ansible.builtin.stat:
@@ -153,6 +151,20 @@
 
     - name: Install git
       ansible.builtin.command: chroot /mnt/gentoo emerge --oneshot dev-vcs/git
+
+    - name: Switch repos.conf ke Git setelah webrsync sukses
+      ansible.builtin.copy:
+        dest: /mnt/gentoo/etc/portage/repos.conf/gentoo.conf
+        mode: '0644'
+        content: |
+          [DEFAULT]
+          main-repo = gentoo
+          [gentoo]
+          location = /var/db/repos/gentoo
+          sync-type = git
+          sync-uri = {{ portage_sync_uri | default('https://github.com/gentoo-mirror/gentoo.git') }}
+          auto-sync = yes
+          sync-depth = 1
 
     - name: Backup webrsync snapshot (Failsafe)
       ansible.builtin.command: chroot /mnt/gentoo cp -a /var/db/repos/gentoo /var/db/repos/gentoo.bak
@@ -178,8 +190,23 @@
   ansible.builtin.command: chroot /mnt/gentoo emaint sync -a
   when: portage_git_check.stat.exists
 
+- name: Pastikan repos.conf tetap mode Git pada rerun
+  ansible.builtin.copy:
+    dest: /mnt/gentoo/etc/portage/repos.conf/gentoo.conf
+    mode: '0644'
+    content: |
+      [DEFAULT]
+      main-repo = gentoo
+      [gentoo]
+      location = /var/db/repos/gentoo
+      sync-type = git
+      sync-uri = {{ portage_sync_uri | default('https://github.com/gentoo-mirror/gentoo.git') }}
+      auto-sync = yes
+      sync-depth = 1
+  when: portage_git_check.stat.exists
+
 # ------------------------------------------------------------------------------
-# 4. OVERLAY GURU (Idempotent)
+# 4. OVERLAY GURU + HYPROVERLAY
 # ------------------------------------------------------------------------------
 - name: Cek ketersediaan eselect-repository
   ansible.builtin.command: chroot /mnt/gentoo bash -c "command -v eselect && eselect repository list"
@@ -191,20 +218,73 @@
   ansible.builtin.command: chroot /mnt/gentoo emerge --oneshot app-eselect/eselect-repository
   when: eselect_repo_check.rc != 0
 
-- name: Cek apakah GURU sudah aktif
-  ansible.builtin.command: chroot /mnt/gentoo eselect repository list
-  register: repo_list
-  changed_when: false
-
 - name: Aktifkan GURU Overlay
   ansible.builtin.command: chroot /mnt/gentoo eselect repository enable guru
-  when: "'guru' not in repo_list.stdout"
 
-- name: Cek apakah repo GURU sudah tersedia secara lokal
-  ansible.builtin.stat:
-    path: /mnt/gentoo/var/db/repos/guru/.git
-  register: guru_repo_check
-
-- name: Sinkronisasi GURU jika belum tersedia
+- name: Sinkronisasi GURU
   ansible.builtin.command: chroot /mnt/gentoo emaint sync -r guru
-  when: not guru_repo_check.stat.exists
+  register: guru_sync
+  retries: 2
+  delay: 5
+  until: guru_sync.rc == 0
+
+- name: Aktifkan Hyproverlay
+  ansible.builtin.command: chroot /mnt/gentoo eselect repository enable hyproverlay
+
+- name: Sinkronisasi Hyproverlay
+  ansible.builtin.command: chroot /mnt/gentoo emaint sync -r hyproverlay
+  register: hyproverlay_sync
+  retries: 2
+  delay: 5
+  until: hyproverlay_sync.rc == 0
+
+# ------------------------------------------------------------------------------
+# 5. KEYWORDS & UNMASK HYPRLAND ECOSYSTEM
+# ------------------------------------------------------------------------------
+- name: Pastikan direktori package.accept_keywords tersedia
+  ansible.builtin.file:
+    path: /mnt/gentoo/etc/portage/package.accept_keywords
+    state: directory
+    mode: '0755'
+
+- name: Tulis package.accept_keywords terpusat
+  ansible.builtin.copy:
+    dest: /mnt/gentoo/etc/portage/package.accept_keywords/omgently
+    mode: '0644'
+    content: |
+      # Core system
+      sys-boot/limine ~amd64
+      gui-apps/wf-recorder ~amd64
+
+      # Desktop
+      app-misc/nwg-look ~amd64
+      gui-apps/swayosd ~amd64
+      media-fonts/nerdfonts ~amd64
+      www-client/brave-bin ~amd64
+
+      # GURU overlay
+      app-misc/cliphist ~amd64
+      app-misc/brightnessctl ~amd64
+
+      # Hyproverlay
+      */*::hyproverlay ~amd64
+      >=dev-cpp/sdbus-c++-2.1.0 ~amd64
+
+- name: Pastikan direktori package.unmask tersedia
+  ansible.builtin.file:
+    path: /mnt/gentoo/etc/portage/package.unmask
+    state: directory
+    mode: '0755'
+
+- name: Unmask Hyprland ecosystem
+  ansible.builtin.copy:
+    dest: /mnt/gentoo/etc/portage/package.unmask/hyprland
+    mode: '0644'
+    content: |
+      gui-wm/hyprland
+      gui-libs/hyprcursor
+      gui-libs/hyprgraphics
+      gui-libs/hyprlang
+      gui-libs/hyprutils
+      gui-libs/hyprwayland-scanner
+      x11-libs/aquamarine

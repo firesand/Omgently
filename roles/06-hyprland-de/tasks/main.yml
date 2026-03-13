@@ -25,8 +25,8 @@
 - name: Set USE flag keluarga font Nerd Fonts
   become: true
   ansible.builtin.copy:
-    dest: /mnt/gentoo/etc/portage/package.use/nerd-fonts
-    content: "media-fonts/nerd-fonts JetBrainsMono"
+    dest: /mnt/gentoo/etc/portage/package.use/nerdfonts
+    content: "media-fonts/nerdfonts JetBrainsMono"
     mode: '0644'
 
 - name: Set USE flags untuk NetworkManager Applet
@@ -35,7 +35,32 @@
     dest: /mnt/gentoo/etc/portage/package.use/nm-applet
     content: |
       gnome-extra/nm-applet appindicator -modemmanager
+      >=dev-libs/libdbusmenu-16.04.0-r4 gtk3
+      >=app-crypt/gcr-3.41.2-r2:0 gtk
+      >=x11-libs/gtk+-3.24.51 X
+      dev-cpp/cairomm X
+      dev-cpp/gtkmm X
     mode: '0644'
+
+- name: Set USE flags dependensi Polkit/LXQt
+  become: true
+  ansible.builtin.copy:
+    dest: /mnt/gentoo/etc/portage/package.use/polkit-deps
+    mode: '0644'
+    content: |
+      >=kde-frameworks/kwindowsystem-6.23.0 X
+      >=dev-qt/qtbase-6.10.2 X
+      >=app-text/xmlto-0.0.28-r11 text
+      >=x11-libs/libxkbcommon-1.13.1 X
+      >=sys-apps/systemd-259.3-r1 policykit
+
+- name: Set USE flags dependensi wf-recorder
+  become: true
+  ansible.builtin.copy:
+    dest: /mnt/gentoo/etc/portage/package.use/wf-recorder
+    mode: '0644'
+    content: |
+      >=media-video/ffmpeg-8.0.1 x264
 
 - name: Set USE flags brightnessctl (udev tanpa hard systemd dep)
   become: true
@@ -57,7 +82,7 @@
       # Desktop (main repo, testing)
       app-misc/nwg-look ~amd64
       gui-apps/swayosd ~amd64
-      media-fonts/nerd-fonts ~amd64
+      media-fonts/nerdfonts **
       www-client/brave-bin ~amd64
 
       # GURU overlay (testing)
@@ -129,7 +154,7 @@
 
 - name: Instal Font modern (Nerd Fonts)
   become: true
-  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace media-fonts/nerd-fonts
+  ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace media-fonts/nerdfonts
 
 - name: Instal nwg-look (GTK theme manager untuk Wayland)
   become: true
@@ -240,7 +265,7 @@
       chroot /mnt/gentoo which "$bin" >/dev/null 2>&1 || errors="${errors}Binary ${bin} tidak ditemukan\n"
     done
 
-    chroot /mnt/gentoo which xdg-desktop-portal >/dev/null 2>&1 || errors="${errors}Binary xdg-desktop-portal tidak ditemukan\n"
+    chroot /mnt/gentoo find /usr -name 'xdg-desktop-portal' -type f -executable 2>/dev/null | grep -q . || errors="${errors}Binary xdg-desktop-portal tidak ditemukan\n"
     chroot /mnt/gentoo which nm-applet >/dev/null 2>&1 || errors="${errors}Binary nm-applet tidak ditemukan\n"
 
     {% if (device_type | default('desktop')) == 'laptop' %}
