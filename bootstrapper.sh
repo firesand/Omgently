@@ -57,7 +57,16 @@ fi
 # Gunakan "--" agar nilai default yang diawali '-' (contoh: -j8 -l8) tidak diparsing sebagai opsi whiptail.
 ask_input() { whiptail --title "$1" --inputbox "$2" 10 60 -- "$3" 3>&1 1>&2 2>&3; }
 ask_menu() { whiptail --title "$1" --menu "$2" 15 70 5 "${@:3}" 3>&1 1>&2 2>&3; }
+ask_radio() { whiptail --title "$1" --radiolist "$2\n\nGunakan SPASI untuk memilih, ENTER untuk konfirmasi." 18 76 8 "${@:3}" 3>&1 1>&2 2>&3; }
 ask_yesno() { whiptail --title "$1" --yesno "$2" 10 60; }
+ask_scroll_menu() {
+    local title="$1"
+    local prompt="$2"
+    local height="${3:-20}"
+    local items="${4:-10}"
+    shift 4
+    whiptail --title "$title" --menu "$prompt" "$height" 74 "$items" "$@" 3>&1 1>&2 2>&3
+}
 yaml_quote() {
     local escaped
     escaped="$(printf "%s" "$1" | sed "s/'/''/g")"
@@ -83,25 +92,89 @@ ask_input_validated() {
 
 # 4. PENGUMPULAN DATA
 HOSTNAME=$(ask_input_validated "Hostname" "Masukkan hostname sistem:" "omarchy-gentoo" '^[a-zA-Z0-9._-]+$' "Gunakan hanya huruf, angka, titik, underscore, atau strip.")
-TIMEZONE=$(ask_input_validated "Timezone" "Masukkan timezone Anda:" "Asia/Jakarta" '^[A-Za-z0-9_+./-]+$' "Format timezone tidak valid. Contoh: Asia/Jakarta")
-SYSTEM_LOCALE=$(ask_input_validated "Locale" "Masukkan locale default sistem:" "en_US.UTF-8" '^[a-z]{2}_[A-Z]{2}\.[A-Za-z0-9_-]+$' "Format locale tidak valid. Gunakan format seperti: en_US.UTF-8")
+TZ_REGION=$(ask_scroll_menu "Timezone (1/2)" "Pilih region:" 20 12 \
+    "Asia" "Jakarta, Tokyo, Shanghai, ..." \
+    "Europe" "London, Berlin, Paris, ..." \
+    "America" "New_York, Chicago, Los_Angeles, ..." \
+    "Africa" "Cairo, Nairobi, Johannesburg, ..." \
+    "Australia" "Sydney, Melbourne, Perth, ..." \
+    "Pacific" "Auckland, Fiji, Honolulu, ..." \
+    "Indian" "Maldives, Mauritius, ..." \
+    "Atlantic" "Reykjavik, Azores, ..." \
+    "Etc" "UTC, GMT, ..." \
+    "Lainnya" "Ketik manual")
+if [ "$TZ_REGION" == "Lainnya" ]; then
+    TIMEZONE=$(ask_input_validated "Timezone" "Masukkan timezone lengkap:" "Asia/Jakarta" '^[A-Za-z0-9_+./-]+$' "Format timezone tidak valid.")
+else
+    TZ_CITIES=()
+    if [ -d "/usr/share/zoneinfo/${TZ_REGION}" ]; then
+        while IFS= read -r city; do
+            short_name="$(basename "$city")"
+            TZ_CITIES+=("${TZ_REGION}/${short_name}" "$short_name")
+        done < <(find "/usr/share/zoneinfo/${TZ_REGION}" -maxdepth 1 -type f | sort)
+    fi
 
-if ask_yesno "Dual-Boot" "Apakah mesin ini dual-boot (macOS/Windows)?\n(hwclock akan dikunci ke UTC)"; then HWCLOCK="UTC"; else HWCLOCK="local"; fi
+    if [ "${#TZ_CITIES[@]}" -gt 0 ]; then
+        TIMEZONE=$(ask_scroll_menu "Timezone (2/2)" "Pilih zona waktu di ${TZ_REGION}:" 20 12 "${TZ_CITIES[@]}")
+    else
+        TIMEZONE=$(ask_input_validated "Timezone" "Masukkan timezone lengkap:" "${TZ_REGION}/UTC" '^[A-Za-z0-9_+./-]+$' "Format timezone tidak valid.")
+    fi
+fi
+
+SYSTEM_LOCALE=$(ask_scroll_menu "Locale" "Pilih locale default sistem:" 20 10 \
+    "en_US.UTF-8" "English (United States)" \
+    "id_ID.UTF-8" "Bahasa Indonesia" \
+    "ja_JP.UTF-8" "Japanese" \
+    "zh_CN.UTF-8" "Chinese (Simplified)" \
+    "ko_KR.UTF-8" "Korean" \
+    "de_DE.UTF-8" "German" \
+    "fr_FR.UTF-8" "French" \
+    "es_ES.UTF-8" "Spanish" \
+    "pt_BR.UTF-8" "Portuguese (Brazil)" \
+    "ru_RU.UTF-8" "Russian" \
+    "Lainnya" "Ketik manual")
+if [ "$SYSTEM_LOCALE" == "Lainnya" ]; then
+    SYSTEM_LOCALE=$(ask_input_validated "Locale" "Masukkan locale (contoh: en_GB.UTF-8):" "en_US.UTF-8" '^[a-z]{2}_[A-Z]{2}\.[A-Za-z0-9_-]+$' "Format locale tidak valid.")
+fi
+
+HWCLOCK=$(ask_radio "Hardware Clock" "Pilih mode hardware clock:" \
+    "UTC" "UTC (Disarankan, aman untuk dual-boot)" ON \
+    "local" "Local Time (hanya jika single-boot)" OFF)
 
 CORES=$(nproc)
 MAKEOPTS=$(ask_input "Kompilasi (MAKEOPTS)" "Jumlah thread CPU terdeteksi: $CORES" "-j$CORES -l$CORES")
 MARCH=$(ask_input "Kompilasi (CFLAGS)" "Arsitektur target (-march):" "native")
-CPU_VENDOR=$(awk -F: '/vendor_id/{gsub(/^[ \t]+/, "", $2); print tolower($2); exit}' /proc/cpuinfo)
-if [[ "$CPU_VENDOR" == *"intel"* ]]; then CPU_VENDOR="intel";
-elif [[ "$CPU_VENDOR" == *"amd"* ]]; then CPU_VENDOR="amd";
-else CPU_VENDOR="generic"; fi
+CPU_VENDOR_DETECTED=$(awk -F: '/vendor_id/{gsub(/^[ \t]+/, "", $2); print tolower($2); exit}' /proc/cpuinfo)
+if [[ "$CPU_VENDOR_DETECTED" == *"intel"* ]]; then
+    CPU_VENDOR_DETECTED="intel"
+elif [[ "$CPU_VENDOR_DETECTED" == *"amd"* ]]; then
+    CPU_VENDOR_DETECTED="amd"
+else
+    CPU_VENDOR_DETECTED="generic"
+fi
+CPU_VENDOR_INTEL="OFF"
+CPU_VENDOR_AMD="OFF"
+CPU_VENDOR_GENERIC="OFF"
+if [ "$CPU_VENDOR_DETECTED" == "intel" ]; then
+    CPU_VENDOR_INTEL="ON"
+elif [ "$CPU_VENDOR_DETECTED" == "amd" ]; then
+    CPU_VENDOR_AMD="ON"
+else
+    CPU_VENDOR_GENERIC="ON"
+fi
+CPU_VENDOR=$(ask_radio "CPU Vendor" "Pilih CPU vendor (terdeteksi: $CPU_VENDOR_DETECTED):" \
+    "intel" "Intel" "$CPU_VENDOR_INTEL" \
+    "amd" "AMD" "$CPU_VENDOR_AMD" \
+    "generic" "Generic" "$CPU_VENDOR_GENERIC")
 
 DISKS=$(lsblk -d -n -p -o NAME,SIZE,MODEL,TYPE | awk '$4=="disk" {desc=$2; for(i=3; i<NF; i++) desc=desc "_" $i; print $1 " " desc}')
 DISK_MENU=(); while read -r dev desc; do DISK_MENU+=("$dev" "$(echo "$desc" | tr '_' ' ')"); done <<< "$DISKS"
 TARGET_DISK=$(ask_menu "Partisi Disk" "Pilih drive instalasi (AKAN DIHAPUS):" "${DISK_MENU[@]}")
 if [ -z "$TARGET_DISK" ]; then exit 1; fi
 
-PART_LAYOUT=$(ask_menu "Skema Partisi" "Pilih struktur direktori:" "flat" "Hanya /boot/efi dan / (Menyatu)" "separate_home" "/boot/efi, /, dan /home terpisah")
+PART_LAYOUT=$(ask_radio "Skema Partisi" "Pilih struktur direktori:" \
+    "flat" "Hanya /boot/efi dan / (Menyatu)" ON \
+    "separate_home" "/boot/efi, /, dan /home terpisah" OFF)
 if [ "$PART_LAYOUT" == "separate_home" ]; then
     ROOT_SIZE=$(ask_input_validated "Ukuran Root" "Ukuran / (Root) dalam GB:" "50" '^[1-9][0-9]*$' "Ukuran root harus angka bulat positif (GB).")
 else
@@ -112,17 +185,31 @@ if [ "$SWAP_SIZE" -gt 128 ]; then
     whiptail --title "Peringatan Swap Besar" --yesno "Swap ${SWAP_SIZE}GB terdeteksi.\nIni cukup besar dan bisa jadi typo.\n\nTetap lanjut?" 12 70 || exit 1
 fi
 
-FILESYSTEM=$(ask_menu "Filesystem" "Pilih format Root:" "btrfs" "Modern, snapshot, zstd" "ext4" "Klasik, stabil" "xfs" "Performa tinggi")
-INIT_SYS=$(ask_menu "Init System" "Pilih Init System:" "systemd" "Modern (Disarankan untuk Wayland)" "openrc" "Klasik")
-GPU_VENDOR=$(ask_menu "GPU (Wayland Base)" "Pilih GPU utama:" "nvidia" "NVIDIA Proprietary" "amd" "AMD Radeon" "intel" "Intel Graphics")
-DEVICE_TYPE=$(ask_menu "Tipe Perangkat" "Jenis mesin ini:" "laptop" "Laptop / Portable (WiFi, Baterai, Bluetooth)" "desktop" "Desktop PC / Workstation")
-KEYWORD_PROFILE=$(ask_menu "Portage Keywords" "Pilih profile paket:" "stable" "ACCEPT_KEYWORDS=amd64 (stabil)" "testing" "ACCEPT_KEYWORDS=~amd64 (lebih baru, lebih berisiko)")
+FILESYSTEM=$(ask_radio "Filesystem" "Pilih format Root (radio button):" \
+    "btrfs" "Modern, snapshot, zstd" ON \
+    "ext4" "Klasik, stabil" OFF \
+    "xfs" "Performa tinggi" OFF)
+INIT_SYS=$(ask_radio "Init System" "Pilih Init System (radio button):" \
+    "systemd" "Modern (Disarankan untuk Wayland)" ON \
+    "openrc" "Klasik" OFF)
+GPU_VENDOR=$(ask_radio "GPU (Wayland Base)" "Pilih GPU utama (radio button):" \
+    "nvidia" "NVIDIA Proprietary" ON \
+    "amd" "AMD Radeon" OFF \
+    "intel" "Intel Graphics" OFF)
+DEVICE_TYPE=$(ask_radio "Tipe Perangkat" "Jenis mesin ini (radio button):" \
+    "laptop" "Laptop / Portable (WiFi, Baterai, Bluetooth)" ON \
+    "desktop" "Desktop PC / Workstation" OFF)
+KEYWORD_PROFILE=$(ask_radio "Portage Keywords" "Pilih profile paket (radio button):" \
+    "stable" "ACCEPT_KEYWORDS=amd64 (stabil)" ON \
+    "testing" "ACCEPT_KEYWORDS=~amd64 (lebih baru, lebih berisiko)" OFF)
 if [ "$KEYWORD_PROFILE" == "testing" ]; then
     ACCEPT_KEYWORDS="~amd64"
 else
     ACCEPT_KEYWORDS="amd64"
 fi
-LICENSE_MODE=$(ask_menu "Mode Lisensi" "Pilih mode lisensi package:" "standard" "ACCEPT_LICENSE=* (praktis, termasuk non-free)" "strict_foss" "ACCEPT_LICENSE=@FREE (hanya lisensi bebas)")
+LICENSE_MODE=$(ask_radio "Mode Lisensi" "Pilih mode lisensi package (radio button):" \
+    "standard" "ACCEPT_LICENSE=* (praktis, termasuk non-free)" ON \
+    "strict_foss" "ACCEPT_LICENSE=@FREE (hanya lisensi bebas)" OFF)
 if [ "$LICENSE_MODE" == "strict_foss" ]; then
     ACCEPT_LICENSE="@FREE"
 else
@@ -131,15 +218,33 @@ fi
 if [ "$ACCEPT_KEYWORDS" == "~amd64" ] && [ "$ACCEPT_LICENSE" == "@FREE" ]; then
     whiptail --title "Peringatan Kombinasi" --yesno "Anda memilih Testing (~amd64) + Strict FOSS.\n\nKombinasi ini dapat menyebabkan konflik dependensi,\nterutama untuk driver GPU proprietary dan firmware.\n\nTetap lanjut?" 14 70 || exit 1
 fi
-KERNEL_TYPE=$(ask_menu "Tipe Kernel" "Pilih instalasi kernel:" "bin" "gentoo-kernel-bin (Cepat)" "source" "Kompilasi manual")
+KERNEL_TYPE=$(ask_radio "Tipe Kernel" "Pilih instalasi kernel (radio button):" \
+    "bin" "gentoo-kernel-bin (Cepat)" ON \
+    "source" "Kompilasi manual" OFF)
 
 if [ "$INIT_SYS" == "systemd" ]; then
-    BOOTLOADER=$(ask_menu "Bootloader" "Pilih Bootloader:" "systemd-boot" "Cepat & Minimalis" "limine" "Elegan (Multi-OS)" "grub" "Klasik" "efistub" "Ekstrem (Tanpa Bootloader)")
+    BOOTLOADER=$(ask_radio "Bootloader" "Pilih Bootloader (radio button):" \
+        "systemd-boot" "Cepat & Minimalis" ON \
+        "limine" "Elegan (Multi-OS)" OFF \
+        "grub" "Klasik" OFF \
+        "efistub" "Ekstrem (Tanpa Bootloader)" OFF)
 else
-    BOOTLOADER=$(ask_menu "Bootloader" "Pilih Bootloader:" "limine" "Elegan (Multi-OS)" "grub" "Klasik" "efistub" "Ekstrem (Tanpa Bootloader)")
+    BOOTLOADER=$(ask_radio "Bootloader" "Pilih Bootloader (radio button):" \
+        "limine" "Elegan (Multi-OS)" ON \
+        "grub" "Klasik" OFF \
+        "efistub" "Ekstrem (Tanpa Bootloader)" OFF)
 fi
 
-LOGIN_STYLE=$(ask_menu "Gaya Login" "Pilih sesi masuk:" "dm" "Greetd (TUI elegan, otomatis ke Hyprland)" "tty" "TTY murni")
+LOGIN_STYLE=$(ask_radio "Gaya Login" "Pilih sesi masuk:" \
+    "dm" "Greetd (TUI elegan, otomatis ke Hyprland)" ON \
+    "tty" "TTY murni (manual start Hyprland)" OFF)
+DEFAULT_TERMINAL=$(ask_menu "Default Terminal" "Pilih terminal default (gaya dropdown):" \
+    "ghostty" "Ghostty (modern)" \
+    "kitty" "Kitty" \
+    "alacritty" "Alacritty")
+DEFAULT_BROWSER=$(ask_menu "Default Browser" "Pilih browser default (gaya dropdown):" \
+    "brave" "Brave" \
+    "firefox" "Firefox")
 
 USERNAME=$(ask_input_validated "User Setup" "Masukkan username utama:" "koki" '^[a-z_][a-z0-9_-]{0,31}$' "Username harus lowercase, diawali huruf/underscore, maks 32 karakter.")
 if [ "$USERNAME" == "root" ]; then
@@ -160,7 +265,18 @@ if [ "$PASSWORD" != "$PASSWORD_CONFIRM" ]; then
 fi
 unset PASSWORD_CONFIRM
 DOTFILES_URL=$(ask_input_validated "Dotfiles Repo" "URL repositori dotfiles Anda:" "https://github.com/firesand/Omgently.git" '^https?://[A-Za-z0-9._~:/?#\[\]@!$&()*+,;=%-]+$' "URL dotfiles tidak valid.")
-GENTOO_MIRROR=$(ask_input_validated "Gentoo Mirror" "Base URL mirror Gentoo:" "https://distfiles.gentoo.org" '^https?://[A-Za-z0-9._~:/?#\[\]@!$&()*+,;=%-]+$' "URL mirror tidak valid.")
+GENTOO_MIRROR=$(ask_scroll_menu "Gentoo Mirror" "Pilih mirror Gentoo terdekat:" 18 8 \
+    "https://distfiles.gentoo.org" "Default Global" \
+    "https://kambing.ui.ac.id/gentoo" "Indonesia (UI Depok)" \
+    "https://ftp.jaist.ac.jp/pub/Linux/Gentoo" "Jepang (JAIST)" \
+    "https://ftp.riken.jp/Linux/gentoo" "Jepang (RIKEN)" \
+    "https://mirrors.tuna.tsinghua.edu.cn/gentoo" "China (Tsinghua)" \
+    "https://ftp.kaist.ac.kr/gentoo" "Korea (KAIST)" \
+    "https://mirror.leaseweb.com/gentoo" "Eropa (LeaseWeb)" \
+    "Lainnya" "Ketik URL manual")
+if [ "$GENTOO_MIRROR" == "Lainnya" ]; then
+    GENTOO_MIRROR=$(ask_input_validated "Gentoo Mirror" "Masukkan base URL mirror Gentoo:" "https://distfiles.gentoo.org" '^https?://[A-Za-z0-9._~:/?#\[\]@!$&()*+,;=%-]+$' "URL mirror tidak valid.")
+fi
 if ! command -v curl &> /dev/null; then
     echo "❌ curl tidak ditemukan. Install curl terlebih dahulu."
     exit 1

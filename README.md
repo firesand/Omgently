@@ -88,6 +88,24 @@ Contoh nilai `gentoo_mirror`:
 - `https://distfiles.gentoo.org` (default global)
 - `https://kambing.ui.ac.id/gentoo` (mirror lokal Indonesia)
 
+### TUI UX (Update)
+
+Wizard TUI sekarang memprioritaskan pemilihan berbasis opsi (tanpa banyak ketik manual):
+
+- `radiolist` (single-choice): `hwclock`, `partition_layout`, `cpu_vendor`, `filesystem`, `init_system`, `gpu_vendor`, `device_type`, `accept_keywords`, `accept_license`, `kernel_type`, `bootloader`, `login_style`.
+- `menu`/scrollable menu: `timezone` (2-step `Region -> City` dari `/usr/share/zoneinfo` + opsi manual), `system_locale` (preset + `Lainnya`), `gentoo_mirror` (preset populer + `Lainnya`), `default_terminal`, `default_browser`.
+- Tetap input manual: `hostname`, `makeopts`, `march_target`, `root_size_gb` (saat `separate_home`), `swap_size_gb`, `username`, `password`, `dotfiles_repo_url`.
+
+### Screenshot TUI
+
+> Catatan: gambar berikut adalah **simulasi visual** untuk dokumentasi GitHub, bukan capture runtime langsung dari sesi installer.
+
+![TUI Radiolist Simulated](docs/screenshots/tui-radiolist-simulated.png)
+
+![TUI Timezone Step 1 Simulated](docs/screenshots/tui-timezone-step1-simulated.png)
+
+![TUI Timezone Step 2 Simulated](docs/screenshots/tui-timezone-step2-simulated.png)
+
 ---
 
 ## 🧾 Menjalankan tanpa TUI
