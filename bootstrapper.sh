@@ -37,8 +37,12 @@ echo "✅ Internet terhubung."
 
 # 2. WAKTU
 echo "⏳ Menyinkronkan waktu sistem (NTP)..."
-if command -v chronyd &> /dev/null; then chronyd -q 'server pool.ntp.org iburst' &> /dev/null || true;
-elif command -v ntpd &> /dev/null; then ntpd -qg &> /dev/null || true; fi
+if command -v chronyd &> /dev/null; then
+    timeout 10 chronyd -q 'server pool.ntp.org iburst' &> /dev/null || true
+elif command -v ntpd &> /dev/null; then
+    timeout 10 ntpd -qg &> /dev/null || true
+fi
+echo "✅ Waktu disinkronkan."
 
 # 3. WHIPTAIL HELPERS
 if ! command -v whiptail &> /dev/null; then
@@ -266,7 +270,7 @@ if [ "$PASSWORD" != "$PASSWORD_CONFIRM" ]; then
     exit 1
 fi
 unset PASSWORD_CONFIRM
-DOTFILES_URL=$(ask_input_validated "Dotfiles Repo" "URL repositori dotfiles Anda:" "https://github.com/firesand/Omgently.git" '^https?://[A-Za-z0-9._~:/?#\[\]@!$&()*+,;=%-]+$' "URL dotfiles tidak valid.")
+DOTFILES_URL=$(ask_input_validated "Dotfiles Repo" "URL repositori dotfiles Anda:" "https://github.com/firesand/Omgently.git" '^https?://.+$' "URL harus diawali https:// atau http://")
 GENTOO_MIRROR=$(ask_scroll_menu "Gentoo Mirror" "Pilih mirror Gentoo terdekat:" 18 8 \
     "https://distfiles.gentoo.org" "Default Global" \
     "https://kambing.ui.ac.id/gentoo" "Indonesia (UI Depok)" \
@@ -277,7 +281,7 @@ GENTOO_MIRROR=$(ask_scroll_menu "Gentoo Mirror" "Pilih mirror Gentoo terdekat:" 
     "https://mirror.leaseweb.com/gentoo" "Eropa (LeaseWeb)" \
     "Lainnya" "Ketik URL manual")
 if [ "$GENTOO_MIRROR" == "Lainnya" ]; then
-    GENTOO_MIRROR=$(ask_input_validated "Gentoo Mirror" "Masukkan base URL mirror Gentoo:" "https://distfiles.gentoo.org" '^https?://[A-Za-z0-9._~:/?#\[\]@!$&()*+,;=%-]+$' "URL mirror tidak valid.")
+    GENTOO_MIRROR=$(ask_input_validated "Gentoo Mirror" "Masukkan base URL mirror Gentoo:" "https://distfiles.gentoo.org" '^https?://.+$' "URL harus diawali https:// atau http://")
 fi
 if ! command -v curl &> /dev/null; then
     echo "❌ curl tidak ditemukan. Install curl terlebih dahulu."
