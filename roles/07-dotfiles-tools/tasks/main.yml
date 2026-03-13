@@ -49,6 +49,22 @@
       become: true
       ansible.builtin.command: chroot /mnt/gentoo emerge --quiet --noreplace app-admin/stow
 
+    - name: Hapus symlink broken jika ada (dari run sebelumnya)
+      become: true
+      ansible.builtin.shell: |
+        TARGET="/mnt/gentoo/home/{{ username }}/.dotfiles"
+        if [ -L "$TARGET" ] && [ ! -e "$TARGET" ]; then
+          rm -f "$TARGET"
+          echo "removed-broken-symlink"
+        elif [ -L "$TARGET" ]; then
+          rm -f "$TARGET"
+          echo "removed-symlink"
+        else
+          echo "ok"
+        fi
+      register: dotfiles_symlink_check
+      changed_when: "'removed' in dotfiles_symlink_check.stdout"
+
     - name: Clone repositori Dotfiles (Eksekusi sebagai User Utama)
       become: true
       ansible.builtin.shell: |
@@ -70,7 +86,12 @@
 
     - name: Tentukan path root stow
       ansible.builtin.set_fact:
-        dotfiles_stow_root: "{{ '/home/' ~ username ~ '/.dotfiles/dotfiles' if (dotfiles_nested_dir.stat.isdir | default(false)) else '/home/' ~ username ~ '/.dotfiles' }}"
+        dotfiles_stow_root: >-
+          {{ '/home/' ~ username ~ '/.dotfiles/dotfiles'
+             if dotfiles_nested_dir.stat.exists is defined
+                and dotfiles_nested_dir.stat.exists
+                and (dotfiles_nested_dir.stat.isdir | default(false))
+             else '/home/' ~ username ~ '/.dotfiles' }}
 
     - name: Verifikasi folder Stow tersedia
       become: true
